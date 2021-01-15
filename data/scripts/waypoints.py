@@ -62,7 +62,6 @@ def scriptBuyPotions(player, interval):
             success = True
             for pot in ('hp','mp','shp','smp','ghp','gmp'):
                 if Player.Potions[pot] != 0 and Player.Potions[pot] < 3000:
-                    print(pot)
                     success = False
                     if not player.isInFight():
                         player.say("!cargar %s, 3000" % pot)
@@ -77,6 +76,8 @@ def scriptBuyPotions(player, interval):
                         elif "No tienes" in defaultMsg:
                             Client.speak("No tienes suficiente dinero.")
                             break
+                        else:
+                            success = True
             if success:
                 Game.IsBuyPots = False
         else:
