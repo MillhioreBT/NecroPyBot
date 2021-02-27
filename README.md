@@ -14,15 +14,15 @@
 * Cualquier Nombre, ID, Nick o lo que sea que se parezca a algo o alguien en la vida real es pura coincidencia!
 
 ## Contacto
-* por ahora no proporcionara un contacto directo!
+* por ahora no hay un contacto directo!
 
 ## Donaciones para mejorar el bot
-* por ahora no hay enlace para donaciones!
+* por ahora no hay un enlace para donaciones!
 
 ## NecroPyBot version 12 status
-* Actualmente se encuentra en desarrollo, le faltan muchas caracteriscas importantes, pero se esta trabajando en ello ;)
+* Actualmente se encuentra en desarrollo, le faltan muchas caracteriscas importantes, pero se esta trabajando en ello ;D
 
 ## Creditos especiales
 * Sarah Wesker!
-* @vsantiago113 (por el grandioso modulo `ReadWriteMemory` que tomado prestado)
-* en general gracias a Python ;)
+* @vsantiago113 por el grandioso modulo `ReadWriteMemory` que tomado prestado.
+* en general gracias a Python ;D
