@@ -21,3 +21,8 @@
 
 ## NecroPyBot version 12 status
 * Actualmente se encuentra en desarrollo, le faltan muchas caracteriscas importantes, pero se esta trabajando en ello ;)
+
+## Creditos especiales
+* Sarah Wesker!
+* @vsantiago113 (por el grandioso modulo `ReadWriteMemory` que tomado prestado)
+* en general gracias a Python ;)
