@@ -16,28 +16,29 @@ def scriptHealing(player, interval):
     Player.lastMppc = player.getMppc()
 
     healSpell = SpellHotkey.getByName("HealSpell")
-    if Player.lastHppc <= healSpell.getHppc():
-        Client.sendKeys(healSpell.getButton())
+    if Player.lastHppc != 0 and Player.lastHppc <= healSpell.getHppc():
+        Send_Keystrokes(healSpell.getButton())
 
+    Player.lastHppc = player.getHppc()
     ghp_hotkey = SpellHotkey.getByName("GreatHealthPotion")
-    if player.getHppc() <= ghp_hotkey.getHppc():
-        Client.sendKeys(ghp_hotkey.getButton())
+    if Player.lastHppc != 0 and Player.lastHppc <= ghp_hotkey.getHppc():
+        Send_Keystrokes(ghp_hotkey.getButton())
 
     gmp_hotkey = SpellHotkey.getByName("GreatManaPotion")
-    if Player.lastMppc <= gmp_hotkey.getMppc():
-        Client.sendKeys(gmp_hotkey.getButton())
+    if Player.lastMppc != 0 and Player.lastMppc <= gmp_hotkey.getMppc():
+        Send_Keystrokes(gmp_hotkey.getButton())
 
     playerName = player.getName()
     if player.isMage():
         manashield_spell = SpellHotkey.getByName("Manashield")
         if player.getMppc() >= manashield_spell.getHppc() and not player.isManashield():
-            Client.sendKeys(manashield_spell.getButton())
+            Send_Keystrokes(manashield_spell.getButton())
     else:
         manashield_spell = SpellHotkey.getByName("Manashield")
         if player.getHppc() <= manashield_spell.getHppc() and not player.isManashield():
-            Client.sendKeys(manashield_spell.getButton())
+            Send_Keystrokes(manashield_spell.getButton())
         elif player.getHppc() > manashield_spell.getHppc() and player.isManashield():
-            Client.sendKeys(manashield_spell.getButton())
+            Send_Keystrokes(manashield_spell.getButton())
 
     haste_spell = SpellHotkey.getByName("Haste")
     if not player.isInPz() and player.getMppc() >= haste_spell.getMppc() and player.isInFight():

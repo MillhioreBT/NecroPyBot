@@ -9,19 +9,27 @@ from todo import *
 #________________________ooooo__oooo_________________________________________
 
 def WaypointScriptRunning(player, interval):
-    if player and Game.getCheckWaypoints() and not Game.IsAttacking and not Game.IsLooting:
-        Waypoints.running(player)
+    button_cave_bot_colour = Menus.Main.cave_bot.GetForegroundColour()
+    if player and g_game.getCheckWaypoints():
+        if not g_game.stop_walking and not g_game.buy_pots:
+            if not g_game.attacking and not g_game.looting:
+                g_waypoints.run(player)
+                if button_cave_bot_colour != wx.BLACK:
+                    Menus.Main.cave_bot.SetForegroundColour(wx.BLACK)
+                return
+    if button_cave_bot_colour == wx.BLACK:
+        Menus.Main.cave_bot.SetForegroundColour(Menus.ScriptLockedColour)
 
 def scriptRecWaypoints(player, interval):
-    if player and Game.RecWaypoints:
-        playerPos = player.getPosition()
-        if not Waypoints.lastPositionRec and len(Waypoints.waypoints) > 0:
-            Waypoints.lastPositionRec = Waypoints.waypoints[-1]
-        if not Waypoints.lastPositionRec or Waypoints.lastPositionRec.getPosition().getDistance(playerPos) >= 10:
-            Waypoints.lastPositionRec = Waypoint(playerPos)
-            wx.CallAfter(MenuProperties.CaveBotMenu.AddWaypointOrder, Waypoints.lastPositionRec)
+    if player and g_waypoints.record:
+        player_pos = player.getPosition()
+        if not g_waypoints.lastRecord and g_waypoints.count() > 0:
+            g_waypoints.lastRecord = g_waypoints.get(-1)
+        if not g_waypoints.lastRecord or g_waypoints.lastRecord.getPosition().getDistance(player_pos) >= 10:
+            g_waypoints.lastRecord = Waypoint(player_pos)
+            wx.CallAfter(Menus.CaveBot.AddWaypointOrder, g_waypoints.lastRecord)
 
-script = Script("Waypoints", 100, locked=True, hide=True)
+script = Script("Waypoints", 100, locked=True)
 script.onThink = WaypointScriptRunning
 script.onThink = scriptRecWaypoints
 script.register()
@@ -35,22 +43,31 @@ script.register()
 #________________________________________________________oooo_____________________________________
 
 def scriptPotionUpdate(player, interval):
-    defaultMsg = Player.getDefaultMessage()
-    if defaultMsg:
-        pots = {
-            'hp': "cargas de Health",
-            'mp': "cargas de Mana",
-            'shp': "cargas de Strong Health",
-            'smp': "cargas de Strong Mana",
-            'ghp': "cargas de Great Health",
-            'gmp': "cargas de Great Mana"
-        }
-        for p in pots:
-            if pots[p] in defaultMsg:
-                count = int(luaString_match(defaultMsg, "(%d+) cargas")) or 0
-                if count != Player.Potions[p]:
-                    Player.Potions[p] = count
-                break
+    if player:
+        defaultMsg = player.getDefaultMessage()
+        if defaultMsg:
+            pots = {
+                'hp': "cargas de Health",
+                'mp': "cargas de Mana",
+                'shp': "cargas de Strong Health",
+                'smp': "cargas de Strong Mana",
+                'ghp': "cargas de Great Health",
+                'gmp': "cargas de Great Mana"
+            }
+            for p in pots:
+                if pots[p] in defaultMsg:
+                    count = int(lstring.match(defaultMsg, "(%d+) cargas")) or 0
+                    if count != Player.Potions[p]:
+                        if player.getStorageValue('verify_buy_pots'):
+                            if Player.lastPotions[p] < count:
+                                g_dispatcher.addTask(0, Client.speak, "Recarga exitosa.")
+                            else:
+                                g_dispatcher.addTask(0, Client.speak, "Intentare recargar nuevamente.")
+                                g_game.buy_pots = True
+                            player.setStorageValue('verify_buy_pots', False)
+                        Player.lastPotions[p] = Player.Potions[p]
+                        Player.Potions[p] = count
+                    break
 
 script = Script("PotionUpdate", 100, locked=True)
 script.onThink = scriptPotionUpdate
@@ -58,33 +75,42 @@ script.register()
 
 def scriptBuyPotions(player, interval):
     if player:
-        if Game.IsBuyPots:
+        if g_game.buy_pots:
             success = True
             for pot in ('hp','mp','shp','smp','ghp','gmp'):
-                if Player.Potions[pot] != 0 and Player.Potions[pot] < 3000:
+                charges = Player.Potions[pot]
+                if charges != 0 and charges < 3000:
                     success = False
                     if not player.isInFight():
                         player.say("!cargar %s, 3000" % pot)
-                        time.sleep(0.01)
-                        defaultMsg = Player.getDefaultMessage()
+                        time.sleep(0.2)
+                        defaultMsg = player.getDefaultMessage()
                         if "Has comprado" in defaultMsg:
-                            newCharges = int(luaString_match(defaultMsg, "Ahora tienes (%d+)")) or 0
-                            Client.speak("Has comprado %d cargas, ahora tienes %d potas." % (newCharges - Player.Potions[pot], newCharges))
-                            Player.Potions[pot] = newCharges
+                            new_charges = int(lstring.match(defaultMsg, "Ahora tienes (%d+)")) or 0
+                            buy_charges = new_charges - charges
+                            print("You have bought %d charges, now you have %d potions." % (buy_charges, new_charges))
+                            g_dispatcher.addTask(0, Client.speak, "Has comprado %d cargas, ahora tienes %d potas." % (buy_charges, new_charges))
+                            Player.Potions[pot] = new_charges
                             success = True
                             break
                         elif "No tienes" in defaultMsg:
-                            Client.speak("No tienes suficiente dinero.")
+                            print("You don't have enough money.")
+                            g_dispatcher.addTask(0, Client.speak, "No tienes suficiente dinero.")
                             break
                         else:
+                            print("The command to buy potions was executed, but the purchase could not be verified.")
+                            g_dispatcher.addTask(0, Client.speak, "No se pudo verificar la recarga de las potas, intentare verificar una ves mas.")
+                            player.setStorageValue('verify_buy_pots', True)
                             success = True
             if success:
-                Game.IsBuyPots = False
-        else:
+                g_game.buy_pots = False
+        elif not player.getStorageValue('verify_buy_pots'):
             for pot in ('hp','mp','shp','smp','ghp','gmp'):
-                if Player.Potions[pot] != 0 and Player.Potions[pot] < 500:
-                    Game.IsBuyPots = True
-                    Client.speak("Advertencia: te quedan %d cargas. Iniciando procedimiento de recarga..." % Player.Potions[pot])
+                charges = Player.Potions[pot]
+                if charges != 0 and charges < 500:
+                    g_game.buy_pots = True
+                    print("You have %d %s charges left. Waiting to buy." % (charges, pot))
+                    g_dispatcher.addTask(0, Client.speak, "Te quedan %d potas. Esperando para comprar." % charges)
                     break
 
 script = Script("BuyPotions", 1000, locked=True)

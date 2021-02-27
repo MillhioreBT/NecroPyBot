@@ -9,14 +9,13 @@ from todo import *
 #_______________oooo________________________________________________________________
 
 def scriptExpPerHour(player, interval):
-    if not player:
-        return
-    currentExp = player.getExperience()
-    Events.Player_onChangeExperience(currentExp, Player.lastExp)
-    Player.lastExp = currentExp
-    checkExpSpeed(player)
-    wx.CallAfter(MenuProperties.MainMenu.UpdatePlayerStatus)
+    if player:
+        currentExp = player.getExperience()
+        Events.Player_onChangeExperience(currentExp, Player.lastExp)
+        Player.lastExp = currentExp
+        checkExpSpeed(player)
+        wx.CallAfter(Menus.Main.UpdatePlayerStatus)
 
-script = Script("Exp/Hour", 1000, hide=True, locked=True)
+script = Script("Exp/Hour", 1000, locked=True)
 script.onThink = scriptExpPerHour
-script.register()
+script.register(__name__)

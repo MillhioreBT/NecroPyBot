@@ -1,4 +1,3 @@
-import win32con
 import win32com
 import json
 import win32gui
@@ -14,14 +13,16 @@ import keyboard
 import re
 import math
 import datetime
-import pyscreenshot as ImageGrab
 import importlib
 import emoji
 import signal
+import binascii
+import subprocess
 
 OS_WINDOWS = sys.platform == 'win32'
 OS_LINUX = not OS_WINDOWS
 
+from collections import deque, defaultdict
 from queue import Queue
 from timeit import default_timer as timer
 from random import *
@@ -29,6 +30,8 @@ from win32com.client import Dispatch
 from ctypes import *
 from ctypes.wintypes import *
 from ReadWriteMemory import ReadWriteMemory
+from pywinauto import win32functions
+from win32 import win32process
 from pywinauto.application import Application
 from win10toast import ToastNotifier
 toaster = ToastNotifier()
@@ -46,8 +49,12 @@ user32 = windll.user32
 import lupa
 from lupa import LuaRuntime
 lua = LuaRuntime(unpack_returned_tuples=True)
-luaString_match = lua.eval("string.match")
-luaString_gmatch = lua.eval("string.gmatch")
+
+class lstring:
+
+    match = lua.eval("string.match")
+    gmatch = lua.eval("string.gmatch")
+    gsub = lua.eval("string.gsub")
 
 #ooooooooooo                                                 
 # 888    88  oo oooooo oooo  oooo  oo ooo oooo    oooooooo8  
@@ -71,13 +78,12 @@ ADDRESS_PLAYERPOSX = 0x6D8054
 ADDRESS_PLAYERPOSY = 0x6D8058
 ADDRESS_PLAYERPOSZ = 0x6D805C
 ADDRESS_PLAYERISTARGED = 0x53A790
-ADDRESS_PLAYERLASTPING = 0x6D4688
-ADDRESS_PLAYERLASTPONG = 0x6D8044
-ADDRESS_PLAYERUPDATE_POSZ = 0x6D8008
+ADDRESS_PLAYERLASTPING = 0x6D4688 # ? xd
+ADDRESS_PLAYERLASTPONG = 0x6D8044 # ? xd
 ADDRESS_PLAYERVOCATION = 0x54B6A4 # Aparentemente no es la direccion correcta (Need fix)
 ADDRESS_PLAYERGOTOPOSX = 0x6D804C
 ADDRESS_PLAYERGOTOPOSY = 0x6D8044
-ADDRESS_PLAYERGOTOPOSZ = 0x6D805C
+ADDRESS_PLAYERGOTOPOSZ = 0x6D8008
 ADDRESS_BUTTONS_MOVING = 0x53A6C8
 ADDRESS_PLAYER_SOUL = 0x53a77c
 ADDRESS_PLAYER_MAGICLEVEL = 0x53a780
@@ -122,8 +128,16 @@ ADDRESS_SPACE_CONTAINER = 0x00778884
 ADDRESS_SPACE_CONTAINER_OFFSETS = (0x4, 0x30, 0x24, 0xC, 0xC, 0x38, 0x44)
 ADDRESS_INVENTORY_OFFSETS = (0x4, 0x24, 0x10, 0xC, 0x38, 0x18)
 ADDRESS_CONTAINER_START = 0x0077EB3C
-ADDRESS_CONTAINER_POINTER_COUNT = (0x4, 0x0, 0x18, 0xC, 0x4C, 0x4)
-ADDRESS_CONTAINER_POINTER_ID = (0x4, 0x0, 0x18, 0xC, 0x4C, 0x8)
+
+ADDRESS_CONTAINER_POINTER_ID = [
+    (0x4, 0x0, 0x18, 0xC, 0x4C, 0x8),
+    (0x4, 0x0, 0x14, 0xC, 0x4C, 0x8)
+]
+ADDRESS_CONTAINER_POINTER_COUNT = [
+    (0x4, 0x0, 0x18, 0xC, 0x4C, 0x4),
+    (0x4, 0x0, 0x14, 0xC, 0x4C, 0x4)
+]
+
 ADDRESS_CONTAINER_SLOT_SEPARATOR = 32 # 32 is 0x20
 ADDRESS_ID_ONLOOKCLICK = 0x6D4604 # ItemId/CreatureType
 ADDRESS_COUNT_ONLOOKCLICK = 0x6D4600 # Count/CreatureId
@@ -155,7 +169,9 @@ ADDRESS_BATTLELIST_LIGHTCOLOR = 0x732900
 ADDRESS_BATTLELIST_HPPC = 0x73290C
 ADDRESS_BATTLELIST_ISVI = 0x732924
 ADDRESS_BATTLELIST_ISWA = 0x7328D0
-ADDRESS_BATTLELIST_SQUARECOLOR = 0x732930
+ADDRESS_BATTLELIST_SQUARECOLOR_R = 0x732928
+ADDRESS_BATTLELIST_SQUARECOLOR_G = 0x73292C
+ADDRESS_BATTLELIST_SQUARECOLOR_B = 0x732930
 ADDRESS_BATTLELIST_SQUARETOGGLE = 0x732934
 ADDRESS_BATTLELIST_PARTY = 0x73291c
 ADDRESS_BATTLELIST_SKULL = 0x732918
@@ -201,12 +217,15 @@ ACCOUNTADDRESS_IS_CONNECTED = 0x71A8E8
 ACCOUNT_STATUS_DISCONNECTED = -1
 ACCOUNT_STATUS_CONNECTED = 0
 M_PI = 3.14159265358979323846
+STATIC_DURATION_PER_CHARACTER = 60
+MIN_STATIC_TEXT_DURATION = 3000
 
 """
     1/100 consume alrededor de 20% en un procesador de 3.60GHz
     1/10 consume alrededor de 5% en un procesador de 3.60GHz
 """
 THREAD_MIN_TICKS = 1/10
+THREAD_KEYBOARD_MIN_TICKS = 1/100
 
 ICON_POISON = 1 << 0
 ICON_BURN = 1 << 1
@@ -302,6 +321,12 @@ COLOR_BLUE = 0x0000FF
 COLOR_TEAL = 0x008080
 COLOR_AQUA = 0x00FFFF
 
+GAME_ADDRESS_DIALOG_TYPE = 0x53AA4C
+GAME_DIALOG_CLASSIC = 0x485C9F0
+
+DIALOG_UNKNOW = 0
+DIALOG_CLASSIC = 1
+
 WINDOWSCREENKEY = '%sx%s' % (user32.GetSystemMetrics(0), user32.GetSystemMetrics(1))
 WINDOW_CENTER_POSITION = {
     '1440x900': (627, 350, 63, 63/32), # Precision completa!
@@ -350,7 +375,7 @@ WINDOW_SCREEN_OPTIONS = {
 }
 
 if not (WINDOWSCREENKEY in WINDOW_CENTER_POSITION):
-    print("Tu tamaño de pantalla no existe en la base de datos.")
+    print("Your screen size does not exist in the database.")
     exit()
 
 SCREENSIZE = WINDOW_CENTER_POSITION[WINDOWSCREENKEY]
@@ -369,56 +394,17 @@ DIRECTION_NORTHEAST = 7
 ACTION_TYPE_ONUSE = 0
 ACTION_TYPE_ONWAIT = 1
 
-WM_MOUSEFIRST = 0x200
-WM_MOUSEMOVE = 0x200
-WM_LBUTTONDOWN = 0x201
-WM_LBUTTONUP = 0x202
-WM_LBUTTONDBLCLK = 0x203
-WM_RBUTTONDOWN = 0x204
-WM_RBUTTONUP = 0x205
-WM_RBUTTONDBLCLK = 0x206
-WM_MBUTTONDOWN = 0x207
-WM_MBUTTONUP = 0x208
-WM_MBUTTONDBLCLK = 0x209
-WM_MOUSEWHEEL = 0x20A
-WM_MOUSEHWHEEL = 0x20E
-WM_XBUTTONDOWN = 0x020B
-WM_XBUTTONUP = 0x020C
-MK_LBUTTON = 0x0001
-MK_RBUTTON = 0x0002
-MK_SHIFT = 0x0004
-MK_CONTROL = 0x0008
-MK_MBUTTON = 0x0010
-MK_XBUTTON1 = 0x0020
-MK_XBUTTON2 = 0x0040
-
 MESSAGE_INFO_DESCR = 20
 MESSAGE_MONSTER_SAY = 14
 MESSAGE_MAXINDEX = 10
 
+VOCATION_NONE = 0
 VOCATION_SORCERER = 1
 VOCATION_DRUID = 2
 VOCATION_PALADIN = 3
 VOCATION_KNIGHT = 4
 VOCATION_SLASHER = 5
-
-VK_ENTER = "{Enter}"
-VK_F1 = "{F1}"
-VK_F2 = "{F2}"
-VK_F3 = "{F3}"
-VK_F4 = "{F4}"
-VK_F5 = "{F5}"
-VK_F6 = "{F6}"
-VK_F7 = "{F7}"
-VK_F8 = "{F8}"
-VK_F9 = "{F9}"
-VK_F10 = "{F10}"
-VK_F11 = "{F11}"
-VK_F12 = "{F12}"
-VK_UP = "{Up}"
-VK_DOWN = "{Down}"
-VK_LEFT = "{Left}"
-VK_RIGHT = "{Right}"
+VOCATION_NAMES = ('NON','SOR', 'DRU', 'PAL', 'KNI', 'SLA')
 
 CONTAINER_POSITION = 65535
 
@@ -446,7 +432,6 @@ GAME_TITLE = "Origin Server"
 PROCESS_NAME = "Necroxia Origin.exe"
 PROCESS = None
 PROCESS_BASEADDRESS = None
-CLIENT_HANDLE = None
 BOT_PID = 0
 
 # Propiedades para crear un "campo gravitacional" y controlar personajes de un cliente a otro
@@ -455,7 +440,7 @@ PROCESS_ASSIST_NAME = "Origin.exe"
 PROCESS_ASSIST = None
 CLIENT_ASSIST_HANDLE = None
 
-__DEBUG__ = False
+__DEBUG__ = True
 
 #oooo     oooo            o88               
 # 8888o   888   ooooooo   oooo  oo oooooo   
@@ -470,12 +455,12 @@ class Main:
         #Client.updateAssistApp()
         DataBot.LoadHotkeyPresets()
         if DataBot.updateAutoloadSettings():
-            player = Game.getPlayerClient()
+            player = g_game.getPlayer()
             if player:
                 DataBot.LoadHealingMiscellaneousToFile(player.getName())
-                wx.CallAfter(MenuProperties.ExtrasFrame.autoloadSettings.SetValue, True)
-        wx.CallAfter(MenuProperties.MainMenu.UpdateTimeLeft, (0, 0, 0))
-        wx.CallAfter(MenuProperties.MainMenu.UpdateExpPerHour, 0)
+                wx.CallAfter(Menus.Extras.autoloadSettings.SetValue, True)
+        wx.CallAfter(Menus.Main.UpdateTimeLeft, (0, 0, 0))
+        wx.CallAfter(Menus.Main.UpdateExpPerHour, 0)
         Script.loadscripts()
         # Welcomen message XD
         message = TextMessage(1)
@@ -483,8 +468,9 @@ class Main:
         message.setVisible(True)
         message.setTime(5000)
         message.setType(MESSAGE_INFO_DESCR)
-        message.setLines(2)
-        message.content = ['NecroPyBOT:','Welcomen to the version: 3.1','Create by: Alx']
+        message.setPosition(Position(0, 0))
+        message.setLines(1)
+        message.content = ['NecroPyBOT:','Welcomen to the version: 4.0']
         TextMessage.setMessageByIndex(message)
 
 #  oooooooo8 o888  o88                          o8   
@@ -492,6 +478,15 @@ class Main:
 #888          888   888 888oooooo8   888   888 888   
 #888o     oo  888   888 888          888   888 888   
 # 888oooo88  o888o o888o  88oooo888 o888o o888o 888o 
+
+Send_Keystrokes = None
+Send_RightClick = None
+Send_LeftClick = None
+Send_FastLeftClick = None
+
+Client_Handle = None
+Client_Has_Focus = None
+Capture_Image = None
 
 class Client:
     
@@ -506,8 +501,17 @@ class Client:
             Client.App = Application().connect(process=PROCESS.pid)
             Client.Window = Client.App.window(title=GAME_TITLE)
             if Client.Window:
-                global CLIENT_HANDLE
-                CLIENT_HANDLE = Client.Window.handle
+                global Client_Handle, Send_Keystrokes, Send_RightClick, Send_LeftClick, Send_FastLeftClick, Client_Has_Focus, Capture_Image
+                Send_Keystrokes = Client.Window.send_keystrokes
+                Send_RightClick = Client.Window.custom_right_click
+                Send_LeftClick = Client.Window.custom_left_click
+                Send_FastLeftClick = Client.Window.fast_left_click
+                Client_Has_Focus = Client.Window.has_focus
+                Capture_Image = Client.Window.capture
+                Client_Handle = Client.Window.handle
+            else:
+                print("The client handler could not be found.")
+                exit()
 
     def updateAssistApp():
         if (Client.AssistApp == 0):
@@ -519,24 +523,13 @@ class Client:
                 if __DEBUG__:
                     print("[Client]: se ha actualizado el cliente de asistencia.")
 
-    def sendChars(chars):
-        return Client.Window.send_chars(chars)
-
-    def sendKeys(keys, assist: bool = False):
-        try:
-            if not assist:
-                return Client.Window.send_keystrokes(keys)
-            return Client.AssistWindow.send_keystrokes(keys)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
-
     def sendHotkey(player, value):
         hotkey = None
         vtype = type(value)
         foundId = 0
         if vtype is str:
-            if value in Game.Items:
-                foundId = Game.Items[value]
+            if value in g_game.items:
+                foundId = g_game.items[value]
             else:
                 hotkey = Hotkey.getByWords(player, value)
                 if hotkey:
@@ -546,60 +539,24 @@ class Client:
             if hotkey:
                 Client.sendKeys(hotkey.getButton())
 
-    def leftClick(x, y):
-        try:
-            lParam = ((y << 16) | x)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0201, 0x0, lParam)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0202, 0x0, lParam)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
-
-    def rightClick(x, y):
-        try:
-            lParam = ((y << 16) | x)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0204, 0x0, lParam)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0205, 0x0, lParam)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
-
-    def pressEnter():
-        user32.PostMessageW(CLIENT_HANDLE, 0x0100, 0x0D, 0x0)
-        user32.PostMessageW(CLIENT_HANDLE, 0x0101, 0x0D, 0x0)
-
     def speak(text=""):
         if text:
             Windows_Speak = Dispatch('SAPI.Spvoice')
             return Windows_Speak.Speak(text)
 
-    def screenshot(filename):
-        if len(filename) == 0:
-            return print("[Screenshot/Error]: es necesario proporcionar un nombre valido al archivo.")
-        # grab fullscreen
-        #win32gui.SetForegroundWindow(CLIENT_HANDLE)
-        print("Wait 0.5 seconds for the screenshot...")
-        time.sleep(0.5)
-        im = ImageGrab.grab()
-        # save image file
-        im.save('screenshots/%s.png' % filename)
-        print("[Screenshot/Success]: %s.png se ha guardado correctamente.")
-
-    def fastClickLoot(x, y):
-        try:
-            lParam = (y << 16) | x
-            user32.PostMessageW(CLIENT_HANDLE, 0x0100, 0x11, 0x0)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0201, 0x0, lParam)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0202, 0x0, lParam)
-            user32.PostMessageW(CLIENT_HANDLE, 0x0101, 0x11, 0x0)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
+    def screenshot(name):
+        if name:
+            image = Capture_Image((-16, -39))
+            if image:
+                return image.save("screenshots/%s.png" % name)
 
     def fastClickLoot_Assist(x, y):
-        try:
-            lParam = (y << 16) | x
-            user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0201, 0x0, lParam)
-            user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0202, 0x0, lParam)
-        except:
-            print("Unexpected error:", sys.exc_info()[0])
+        #try:
+        lParam = (y << 16) | x
+        user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0201, 0x0, lParam)
+        user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0202, 0x0, lParam)
+        #except:
+        #    print("<Client.fastClickLoot_Assist> Unexpected error:", sys.exc_info()[0])
 
     def setShowFps(mode: bool = True):
         Memory.setNumber(ADDRESS_GAMECLIENT_SHOWFPS, mode and 65536 or 0)
@@ -693,10 +650,14 @@ class Creature:
         return Memory.setNumber(self.offset + ADDRESS_BATTLELIST_PARTY, party)
     
     def getSquare(self):
-        return [Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARETOGGLE) == 1]
+        return wx.Colour(Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_R), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_G), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_B)), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_SQUARETOGGLE) == 1
     
-    def setSquare(self, color=SQ_COLOR_BLACK, enable=False):
-        return Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR, color) and Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARETOGGLE, enable and 1 or 0)
+    def setSquare(self, colour: wx.Colour = None, state=False):
+        if colour is not None:
+            Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_R, colour.Red())
+            Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_G, colour.Green())
+            Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARECOLOR_B, colour.Blue())
+        Memory.setNumber(self.offset + ADDRESS_BATTLELIST_SQUARETOGGLE, state and 1 or 0)
 
     def getLight(self):
         return {
@@ -761,12 +722,12 @@ class Creature:
     def isEnemy(self):
         if self.getName() in Player.Enemys:
             return True
-        return False
+        return not self.isFriend() or not self.isSubFriend()
 
     def isSubEnemy(self):
         if self.getName() in Player.SubEnemys:
             return True
-        return False
+        return not self.isFriend() or not self.isSubFriend()
 
     def isPartyMember(self):
         return self.getParty() >= SHIELD_BLUE
@@ -841,6 +802,24 @@ class Creature:
         Memory.setNumber(self.offset + ADDRESS_BATTLELIST_LOOKADDON, outfit['lookAddon'])
         Memory.setNumber(self.offset + ADDRESS_BATTLELIST_LOOKMOUNT, outfit['lookMount'])
         return True
+
+#oooo     oooo                                    o8                          
+# 8888o   888   ooooooo  oo oooooo    oooooooo8 o888oo ooooooooo8 oo oooooo   
+# 88 888o8 88 888     888 888   888  888ooooooo  888  888oooooo8   888    888 
+# 88  888  88 888     888 888   888          888 888  888          888        
+#o88o  8  o88o  88ooo88  o888o o888o 88oooooo88   888o  88oooo888 o888o       
+
+class Monster(Creature):
+    def __init__(self, index=0):
+        Creature.__init__(self, index)
+        self.type = None
+
+    def getType(self):
+        return self.type
+
+    def setType(self, type):
+        self.type = type
+        return self
 
 #ooooo ooooo             o8   oooo                               
 # 888   888   ooooooo  o888oo  888  ooooo ooooooooo8 oooo   oooo 
@@ -975,7 +954,7 @@ class SpellHotkey:
     """ OTHERS """
 
     def use(self):
-        Client.sendKeys(self.getButton())
+        Send_Keystrokes(self.getButton())
         self.setLastUsed(time.time_ns() + sec_to_ns(self.getCooldown()))
 
     """ STATIC """
@@ -1017,7 +996,7 @@ class DataBot:
                 data = json.load(json_file)
                 if 'AutoloadSettings' in data:
                     DataBot.AutoloadSettings = data['AutoloadSettings']
-                    MenuProperties.ExtrasFrame.autoloadSettings.SetValue(DataBot.AutoloadSettings)
+                    Menus.Extras.autoloadSettings.SetValue(DataBot.AutoloadSettings)
                     return DataBot.AutoloadSettings
 
     @staticmethod
@@ -1034,39 +1013,38 @@ class DataBot:
         # Healing/Miscellaneous to datacode
         heal_spell = SpellHotkey.getByName("HealSpell")
         if heal_spell:
-            heal_spell.setButton('{%s}' % MenuProperties.HealingFrame.healSpellHotkey.GetValue())
-            heal_spell.setHppc(int(MenuProperties.HealingFrame.healSpellValue.GetValue()))
+            heal_spell.setButton('{%s}' % Menus.Healing.healSpellHotkey.GetValue())
+            heal_spell.setHppc(int(Menus.Healing.healSpellValue.GetValue()))
         ghp_hotkey = SpellHotkey.getByName("GreatHealthPotion")
         if ghp_hotkey:
-            ghp_hotkey.setButton('{%s}' % MenuProperties.HealingFrame.GH_PotionHotkey.GetValue())
-            ghp_hotkey.setHppc(int(MenuProperties.HealingFrame.GH_PotionValue.GetValue()))
+            ghp_hotkey.setButton('{%s}' % Menus.Healing.GH_PotionHotkey.GetValue())
+            ghp_hotkey.setHppc(int(Menus.Healing.GH_PotionValue.GetValue()))
         gmp_hotkey = SpellHotkey.getByName("GreatManaPotion")
         if gmp_hotkey:
-            gmp_hotkey.setButton('{%s}' % MenuProperties.HealingFrame.GM_PotionHotkey.GetValue())
-            gmp_hotkey.setMppc(int(MenuProperties.HealingFrame.GM_PotionValue.GetValue()))
+            gmp_hotkey.setButton('{%s}' % Menus.Healing.GM_PotionHotkey.GetValue())
+            gmp_hotkey.setMppc(int(Menus.Healing.GM_PotionValue.GetValue()))
         vocation_id = SpellHotkey.getByName("VocationID")
         if vocation_id:
-            vocation_id.setButton(MenuProperties.HealingFrame.VocationHotkey.GetValue())
-            vocation_id.setHppc(int(MenuProperties.HealingFrame.VocationID.GetValue()))
+            vocation_id.setButton('{%s}' % Menus.Healing.VocationHotkey.GetValue())
+            vocation_id.setHppc(int(Menus.Healing.VocationID.GetValue()))
         haste_spell = SpellHotkey.getByName("Haste")
         if haste_spell:
-            haste_spell.setButton('{%s}' % MenuProperties.HealingFrame.hasteSpellHotkey.GetValue())
-            haste_spell.setHppc(int(MenuProperties.HealingFrame.hasteSpellValue.GetValue()))
+            haste_spell.setButton('{%s}' % Menus.Healing.hasteSpellHotkey.GetValue())
+            haste_spell.setHppc(int(Menus.Healing.hasteSpellValue.GetValue()))
         manashield_spell = SpellHotkey.getByName("Manashield")
         if manashield_spell:
-            manashield_spell.setButton('{%s}' % MenuProperties.HealingFrame.manashieldHotkey.GetValue())
-            manashield_spell.setHppc(int(MenuProperties.HealingFrame.manashieldValue.GetValue()))
+            manashield_spell.setButton('{%s}' % Menus.Healing.manashieldHotkey.GetValue())
+            manashield_spell.setHppc(int(Menus.Healing.manashieldValue.GetValue()))
         buff_spell = SpellHotkey.getByName("BuffSpell")
         if buff_spell:
-            buff_spell.setButton('{%s}' % MenuProperties.HealingFrame.buffSpellHotkey.GetValue())
-            buff_spell.setHppc(int(MenuProperties.HealingFrame.buffSpellValue.GetValue()))
+            buff_spell.setButton('{%s}' % Menus.Healing.buffSpellHotkey.GetValue())
+            buff_spell.setHppc(int(Menus.Healing.buffSpellValue.GetValue()))
         datacode = []
         for spellName in SpellHotkey.spellList:
             spellHotkey = SpellHotkey.spellList[spellName]
-            match = re.compile(r'(\w\d+)').search(spellHotkey.getButton())
             datacode.append({
                 'name': spellName,
-                'button': match and match.group() or '',
+                'button': spellHotkey.getButton(),
                 'health': spellHotkey.health,
                 'mana': spellHotkey.mana
             })
@@ -1082,11 +1060,10 @@ class DataBot:
         with open('data/%s.txt' % file) as json_file:
             data = json.load(json_file)
             for s in data:
-                button = '{%s}' % s['button']
-                SpellHotkey(s['name'], button, s['health'], s['mana'])
+                SpellHotkey(s['name'], s['button'], s['health'], s['mana'])
                 #print("load spellHotkey %s | Keys: %s" % (s['name'], button))
             print("[DataBot]: se ha cargado el archivo data/%s.txt" % file)
-            wx.CallAfter(MenuProperties.HealingFrame.UpdateHotkeys)
+            wx.CallAfter(Menus.Healing.UpdateHotkeys)
 
     """ Waypoints Save And Load """
     @staticmethod
@@ -1095,25 +1072,25 @@ class DataBot:
         with open('data/cavebot/%s.txt' % file) as json_file:
             data = json.load(json_file)
             # Waypoints
-            Waypoints.waypoints.clear()
+            g_waypoints.clear()
             if 'waypoints' in data:
                 posStrList = []
                 for p in data['waypoints']:
-                    w = Waypoint(Position(p['x'], p['y'], p['z']), ('t' in p and p['t'] or WAYPOINT_TYPE_STAND))
+                    w = Waypoint(Position(p['x'], p['y'], p['z']), ('t' in p and p['t'] or WAYPOINT_STAND))
                     if 'nx' in p:
                         w.setNodePos(Position(p['nx'], p['ny'], p['nz']))
                     if 'a' in p:
                         w.setAction(WaypointAction(p['a']['t'], Position(p['a']['x'], p['a']['y'], p['a']['z']), p['a']['r']))
-                    Waypoints.waypoints.append(w)
-                MenuProperties.CaveBotMenu.OrderWaypoints()
+                    g_waypoints.append(w)
+                Menus.CaveBot.OrderWaypoints()
             # Looting
-            if not MenuProperties.CaveBotMenu.autolootLocked.IsChecked():
+            if not Menus.CaveBot.autolootLocked.IsChecked():
                 Looting.itemList.clear()
             if 'looting' in data:
                 looStrList = []
                 for itemId in data['looting']:
                     Looting.addItem(itemId)
-                MenuProperties.CaveBotMenu.OrderLooting()
+                Menus.CaveBot.OrderLooting()
             print("[CaveBot]: se ha cargado el archivo data/cavebot/%s.txt correctamente." % file)
 
     @staticmethod
@@ -1123,7 +1100,7 @@ class DataBot:
         datacode['waypoints'] = []
         datacode['looting'] = []
         # Waypoints to datacode
-        for w in Waypoints.getWaypoints():
+        for w in g_waypoints.waypoints:
             pos = w.getPosition()
             npos = w.getNodePos()
             wdata = {'t': w.getType(), 'x': pos.x,'y': pos.y,'z': pos.z}
@@ -1148,7 +1125,7 @@ class DataBot:
         with open('data/cavebot/%s.txt' % file, 'w') as outfile:
             json.dump(datacode, outfile)
             print("[CaveBot]: se ha guardado el archivo data/cavebot/%s.txt correctamente." % file)
-            MenuProperties.CaveBotFrame.fileSelected.Set(MenuProperties.CaveBotFrame.GetFiles())
+            Menus.CaveBot.fileSelected.Set(Menus.CaveBot.GetFiles())
 
     """ Targeting Save And Load """
     @staticmethod
@@ -1156,19 +1133,20 @@ class DataBot:
         """Este metodo cargas en la clase Targeting todos los monstruos que estan guardados en el archivo"""
         with open('data/targeting/%s.txt' % file) as json_file:
             data = json.load(json_file)
-            tmStrList = []
+            Menus.Targeting.monsterList.Clear()
             for m in data['monsterList']:
-                targetMonster = TargetMonster(m['name'])
-                targetMonster.setDistance(m['distance'])
-                targetMonster.setSingleSpell(m['singleSpell'])
-                targetMonster.setPluralSpell(m['pluralSpell'])
-                targetMonster.setIgnoreCount(m['ignoreCount'])
-                targetMonster.setPriority(m['priority'])
-                targetMonster.setCount(m['count'])
-                targetMonster.setAction(m['action'])
-                Targeting.monsterList.append(targetMonster)
-                tmStrList.append(str(targetMonster))
-            MenuProperties.TargetingFrame.monsterList.Set(tmStrList)
+                m_type = TargetMonster(m['name'])
+                m_type.distance = m['distance']
+                m_type.singleSpell = m['singleSpell']
+                m_type.pluralSpell = m['pluralSpell']
+                m_type.specialSingleSpell = m['specialSingleSpell']
+                m_type.specialPluralSpell = m['specialPluralSpell']
+                m_type.ignoreCount = m['ignoreCount']
+                m_type.priority = m['priority']
+                m_type.count = m['count']
+                m_type.action = m['action']
+                g_targeting.add(m_type)
+            Menus.Targeting.UpdateTargetMonsters()
             print("[Targeting]: se ha cargado el archivo data/targeting/%s.txt correctamente." % file)
 
     @staticmethod
@@ -1176,21 +1154,23 @@ class DataBot:
         """Este metodo guardas en un archivo personalizado todas los monstruos que estan en la clase Targeting"""
         datacode = {}
         datacode['monsterList'] = []
-        for tm in Targeting.getMonsters():
+        for m_type in g_targeting.get():
             datacode['monsterList'].append({
-                'name': tm.getName(),
-                'distance': tm.getDistance(),
-                'singleSpell': tm.getSingleSpell(),
-                'pluralSpell': tm.getPluralSpell(),
-                'ignoreCount': tm.getIgnoreCount(),
-                'priority': tm.getPriority(),
-                'count': tm.getCount(),
-                'action': tm.getAction()
+                'name': m_type.name,
+                'distance': m_type.distance,
+                'singleSpell': m_type.singleSpell,
+                'pluralSpell': m_type.pluralSpell,
+                'specialSingleSpell': m_type.specialSingleSpell,
+                'specialPluralSpell': m_type.specialPluralSpell,
+                'ignoreCount': m_type.ignoreCount,
+                'priority': m_type.priority,
+                'count': m_type.count,
+                'action': m_type.action
                 })
         with open('data/targeting/%s.txt' % file, 'w') as outfile:
             json.dump(datacode, outfile)
             print("[Targeting]: se ha guardado el archivo data/targeting/%s.txt correctamente." % file)
-            MenuProperties.TargetingFrame.fileSelected.Set(MenuProperties.TargetingFrame.GetFiles())
+            Menus.Targeting.fileSelected.Set(Menus.Targeting.GetFiles())
 
     HotkeyActivePreset = ""
     HotkeyPresets = {}
@@ -1200,17 +1180,17 @@ class DataBot:
         with open('%s\Origin\Origin.cfg' % os.getenv('APPDATA')) as cfg_file:
             for line in cfg_file:
                 if "HotkeyPreset" in line:
-                    playerName = luaString_match(line, '%("(.-)"')
-                    button = luaString_match(line, ',(%d-),')
-                    command = luaString_match(line, ',"(.-)\n?"')
-                    itemId = luaString_match(line, '"",(%d-),')
+                    playerName = lstring.match(line, '%("(.-)"')
+                    button = lstring.match(line, ',(%d-),')
+                    command = lstring.match(line, ',"(.-)\n?"')
+                    itemId = lstring.match(line, '"",(%d-),')
                     #if __DEBUG__:
                         #print("Hotkey (PlayerName: %s Button: %s Command: %s ItemId: %s) loaded!" % (playerName, button, command, itemId))
                     if not (playerName in DataBot.HotkeyPresets):
                         DataBot.HotkeyPresets[playerName] = []
                     DataBot.HotkeyPresets[playerName].append(Hotkey(button, command, itemId))
                 elif "HotkeyActivePreset" in line:
-                    DataBot.HotkeyActivePreset = luaString_match(line, '"(.-)"')
+                    DataBot.HotkeyActivePreset = lstring.match(line, '"(.-)"')
                     print("Default hotkey list: %s" % DataBot.HotkeyActivePreset)
 
 #ooooooooooo                          o8   oooo     oooo                        
@@ -1486,6 +1466,7 @@ class Corpse(Thing):
         self.looted = False
         self.expire = 0
         self.create_time = time.time()
+        self.wait_time = 0
 
     def isLooted(self):
         return self.looted
@@ -1509,6 +1490,9 @@ class Corpse(Thing):
         self.create_time = create_time
         return True
 
+    def wait(self):
+        self.wait_time = time.time_ns() + sec_to_ns(10)
+
     def isExpire(self):
         expire = (time.time() - self.getCreateTime()) >= (60 * 5)
         if expire:
@@ -1524,6 +1508,9 @@ class Corpse(Thing):
     def isValid(self):
         return not self.isExpire() and not self.isLooted() and self.canSee()
 
+    def isWait(self):
+        return self.wait_time > time.time_ns()
+
 #  oooooooo8                        o8              o88                                      
 #o888     88   ooooooo  oo oooooo o888oo  ooooooo   oooo  oo oooooo   ooooooooo8 oo oooooo   
 #888         888     888 888   888 888    ooooo888   888   888   888 888oooooo8   888    888 
@@ -1532,30 +1519,26 @@ class Corpse(Thing):
 
 class Container:
 
-    def getItem(index=0) -> Thing:
-        return Thing(Memory.getNumber(ADDRESS_CONTAINER_START, ADDRESS_CONTAINER_POINTER_ID, ADDRESS_CONTAINER_SLOT_SEPARATOR * index), Memory.getNumber(ADDRESS_CONTAINER_START, ADDRESS_CONTAINER_POINTER_COUNT, ADDRESS_CONTAINER_SLOT_SEPARATOR * index), index=index)
+    def __init__(self, index=0):
+        self.index = [64,65][index]
+        self.pointer_id = ADDRESS_CONTAINER_POINTER_ID[index]
+        self.pointer_count = ADDRESS_CONTAINER_POINTER_COUNT[index]
 
-    def getItems() -> list:
-        """Devuelve una lista de cosas encontradas en el primer contenedor"""
-        index = 0
+    def getItem(self, index=0) -> Thing:
+        id = Memory.getNumber(ADDRESS_CONTAINER_START, self.pointer_id, ADDRESS_CONTAINER_SLOT_SEPARATOR * index)
+        count = Memory.getNumber(ADDRESS_CONTAINER_START, self.pointer_count, ADDRESS_CONTAINER_SLOT_SEPARATOR * index)
+        return Thing(id, count, Position(CONTAINER_POSITION, self.index, index), index)
+
+    def getItems(self) -> list:
         items = []
-        item = Container.getItem(index)
-        while item.getId() > 99:
-            if index > 30: # Esto es solo es caso de emergencia, no deberia llegar a este limite nunca!
-                break
-            item.setPosition(Position(CONTAINER_POSITION, 64, index))
-            items.append(item)
-            index = index +1
-            item = Container.getItem(index)
+        for i in range(31):
+            item = self.getItem(i)
+            item_id = item.getId()
+            if item_id > 99 and item_id <= 31000:
+                items.append(item)
         return items
 
-    def getItemById(itemId: int) -> Thing:
-        """Devuelve un Thing si lo encuentramos en el contenedor"""
-        items = Container.getItems()
-        if items:
-            for item in items:
-                if item.getId() == itemId:
-                    return item
+g_containers = [Container(0),Container(1)]
 
 #oooo     oooo                                                           
 # 8888o   888  ooooooooo8 oo ooo oooo    ooooooo  oo oooooo  oooo   oooo 
@@ -1639,7 +1622,7 @@ class Memory:
                     print("[Memory]: se ha actualizado el proceso de asistencia correctamente.")
             return True
         else:
-            MenuProperties.ChooseFrame = GuiChooseMenu(MenuProperties.MainMenu)
+            Menus.Choose = GuiChooseMenu(Menus.Main)
             copyList = PROCESS
             pStr = []
             for index, p in enumerate(copyList):
@@ -1647,12 +1630,12 @@ class Memory:
                 p.get_all_access_handle()
                 loadProcess()
                 player_name = ""
-                player = Game.getPlayerClient()
+                player = g_game.getPlayer()
                 if player:
                     player_name = player.getName()
                 pStr.append('%d) [Origin]: %s' % (index, player_name))
             PROCESS = copyList
-            MenuProperties.ChooseFrame.clientList.Set(pStr)
+            Menus.Choose.clientList.Set(pStr)
             return False
 
     def getNumber(address, offsets=(), sepOffset=0) -> int:
@@ -1682,6 +1665,7 @@ class Player(Creature):
     # Cache para el ultimo ClientPlayer encontrado
     CachePlayer = None
     CachePlayerID = 0
+    CachePlayerName = ""
 
     """ Estas dos variables son esteticas, esto significa que solo las uso para darle detalles extras y posiblemente innesesarios"""
     LastPosition = 0
@@ -1701,6 +1685,15 @@ class Player(Creature):
 
     """Control de pociones, esto es exclusivo de necroxia origin"""
     Potions = {
+    'hp': 0,
+    'mp': 0,
+    'shp': 0,
+    'smp': 0,
+    'ghp': 0,
+    'gmp': 0
+    }
+
+    lastPotions = {
     'hp': 0,
     'mp': 0,
     'shp': 0,
@@ -1801,6 +1794,12 @@ class Player(Creature):
     def isBleeding(self):
         return self.hasIcon(ICON_BLEEDING)
 
+    def isVisible(self):
+        return True
+
+    def isPlayer(self):
+        return True
+
     def getHealth(self):
         return Memory.getNumber(ADDRESS_PLAYERHEALTH) ^ self.getClientXor()
 
@@ -1841,7 +1840,7 @@ class Player(Creature):
         return Memory.getNumber(ADDRESS_PLAYERTARGETID)
 
     def getTarget(self):
-        return Game.getCreatureById(self.getTargetId())
+        return g_game.getCreatureById(self.getTargetId())
 
     def getPosX(self):
         return Memory.getNumber(ADDRESS_PLAYERPOSX)
@@ -1859,21 +1858,20 @@ class Player(Creature):
         return Memory.getNumber(ADDRESS_PLAYERISTARGED)
     
     def getTargetSquare(self):
-        return Game.getCreatureById(self.getTargetSquareId())
+        return g_game.getCreatureById(self.getTargetSquareId())
 
     def isAttacking(self):
         return self.getTargetSquareId() != 0
 
     @staticmethod
     def Position():
-        """Este metodo es utilizado solamente para calcular distancias en las funciones de spectators
-        para calcular la posicion del jugador use getPosition por defecto."""
+        """Este metodo estatico es utilizado solamente para calcular distancias en las funciones de spectators
+        para calcular la posicion del jugador con comodidad use el metodo getPosition por defecto, aun da igual."""
         return Position(Memory.getNumber(ADDRESS_PLAYERPOSX), Memory.getNumber(ADDRESS_PLAYERPOSY), Memory.getNumber(ADDRESS_PLAYERPOSZ))
 
     def getVocationId(self):
-        #return Memory.getNumber(ADDRESS_PLAYERVOCATION)
-        vocation_id = SpellHotkey.getByName("VocationID")
-        return vocation_id.getHppc()
+        #return Memory.getNumber(ADDRESS_PLAYERVOCATION) # Need Fix!
+        return SpellHotkey.getByName("VocationID").getHppc()
 
     def isMage(self):
         return self.getVocationId() in (VOCATION_SORCERER, VOCATION_DRUID)
@@ -2002,52 +2000,51 @@ class Player(Creature):
         return False
 
     def setTarget(self, target):
-        currentTarget = self.getTargetSquare()
-        if currentTarget and currentTarget.getId() == target.getId():
-            return False
-        pMovePos, pMoveDir = self.getMovementDir(reverse=[False,True])
-        tMovePos, tMoveDir = target.getMovementDir()
-        cursorPos = target.getPositionOnWindow() + tMovePos + pMovePos
-        #win32api.SetCursorPos((cursorPos.x,cursorPos.y))
-        #MenuProperties.MainMenu.Move(wx.Point(cursorPos.x,cursorPos.y))
-        Client.rightClick(cursorPos.x, cursorPos.y)
-        if Player.hasAttack():
-            Game.addCacheLastCreatures(target)
-        return True
+        target_id = target.getId()
+        if self.getTargetSquareId() != target_id:
+            pMovePos, pMoveDir = self.getMovementDir(reverse=[False,True])
+            tMovePos, tMoveDir = target.getMovementDir()
+            cursorPos = target.getPositionOnWindow() + tMovePos + pMovePos
+            Send_RightClick(cursorPos.x, cursorPos.y)
+            if Player.hasAttack():
+                for t in g_game.cache_targets:
+                    if t.getId() == target_id:
+                        return True
+                g_game.cache_targets.append(target)
+                return True
+        return False
 
-    @staticmethod
-    def getDefaultMessage():
+    def getDefaultMessage(self):
         return Memory.getString(ADDRESS_DEFAULT_MESSAGE)
 
-    @staticmethod
-    def setDefaultMessage(text: str, interval: int):
-        return Memory.setString(ADDRESS_DEFAULT_MESSAGE, text) and Memory.setNumber(ADDRESS_DEFAULT_MESSAGE_INTERVAL, interval)
+    def setDefaultMessage(self, text="", interval=None):
+        Memory.setString(ADDRESS_DEFAULT_MESSAGE, text)
+        Memory.setNumber(ADDRESS_DEFAULT_MESSAGE_INTERVAL, interval or getWordsDuration(text))
+        return True
 
     @staticmethod
     def getChatContent():
         return Memory.getString(ADDRESS_CHAT_CONTENT, offsets=ADDRESS_CHAT_CONTENT_OFFSETS)
 
     @staticmethod
-    def setChatContent(text: str):
+    def setChatContent(text=""):
         return Memory.setString(ADDRESS_CHAT_CONTENT, text, ADDRESS_CHAT_CONTENT_OFFSETS)
 
-    def say(self, text: str):
+    def say(self, text=""):
         Player.setChatContent(text)
-        Client.pressEnter()
+        Keyboard.sendEnter()
 
-    @staticmethod
-    def lootItems():
-        found = False
-        items = Container.getItems()
+    def lootItems(self):
+        found_item = False
+        items = g_containers[0].getItems()
         if items:
             for item in items[::-1]:
                 if item.getId() in Looting.getItems():
-                    found = True
-                    item.setPosition()
+                    found_item = True
                     lootPos = SCREEN_OPTIONS['lootPos']
-                    Game.playerMoveThing(item, Position(lootPos[0], lootPos[1]))
+                    g_game.playerMoveThing(item, Position(lootPos[0], lootPos[1]))
                     time.sleep(GAME_AUTOLOOT_SPEED)
-        return found
+        return found_item
 
 #oooooooooo                        o88    o8   o88                         
 # 888    888  ooooooo    oooooooo8 oooo o888oo oooo   ooooooo  oo oooooo   
@@ -2063,21 +2060,16 @@ class Position:
     """
     def __init__(self, x=0, y=0, z=0):
         self.ups = []
-        if isinstance(x, int): # X, Y, Z
-            self.x = x
-            self.y = y
-            self.z = z
-        elif isinstance(x, (tuple, list)): # (0, 0, 0) or [0, 0, 0]
-            self.x = x[0]
-            self.y = x[1]
-            if len(x) == 3:
+        if isinstance(x, int):
+            self.x, self.y, self.z = x, y, z
+        elif isinstance(x, Position):
+            self.x, self.y, self.z = x.x, x.y, x.z
+        elif isinstance(x, (tuple, list)):
+            self.x, self.y = x[0], x[1]
+            if len(x) > 2:
                 self.z = x[2]
-        elif isinstance(x, Position): # Position(0, 0, 0)
-            self = x
         else:
-            self.x = 0
-            self.y = 0
-            self.z = 0
+            self.x, self.y, self.z = 0, 0, 0
 
     # Verificar si algun vector esta en cero y darle un valor dado, segun la lista self.ups
     def update(self):
@@ -2171,6 +2163,7 @@ class Scripts:
     scriptsList = []
     modules = {}
     lastReload = False
+    scripts_in_reload = []
 
     @staticmethod
     def getScriptList():
@@ -2187,6 +2180,17 @@ class Scripts:
                 return script
 
     @staticmethod
+    def addReload(name):
+        if not Scripts.getScriptInReload(name):
+            Scripts.scripts_in_reload.append(name)
+
+    @staticmethod
+    def getScriptInReload(name):
+        for script_name in Scripts.scripts_in_reload:
+            if script_name == name:
+                return True
+
+    @staticmethod
     def removeScriptByName(name):
         for index, script in enumerate(Scripts.scriptsList):
             if script.getName() == name:
@@ -2199,13 +2203,13 @@ class Scripts:
         Scripts.scriptsList.append(script)
         Scripts.scriptsList.sort(key=lambda s: (s.isLocked(), s.getInterval()))
         Scripts.enclosure_queue.put(script.getName())
-        MenuProperties.ScriptsFrame.UpdateScriptList()
+        Menus.Scripts.UpdateScriptList()
         return script.getIndex()
 
 class Script:
-    def __init__(self, name, interval=None, coinit=None, running=None, locked=False, hide=False):
+    def __init__(self, name, interval=None, coinit=None, running=None, locked=False):
         if Scripts.removeScriptByName(name):
-            print("%s reload...")
+            print("Reload %s success!" % name)
         self.name = name
         self.tasks = []
         self.cinterval = 0
@@ -2214,7 +2218,6 @@ class Script:
         if interval:
             self.interval = interval * 1000 * 1000
         self.locked = locked
-        self.hide = hide
         self.index = -1
         self.desc = "No description provided."
         self.module = ""
@@ -2258,16 +2261,17 @@ class Script:
     def getDescription(self):
         return self.desc
    
-    def register(self, module_name = None):
-        index = Scripts.addScript(self)
+    def register(self, module_name=None):
+        Scripts.addScript(self)
         self.module = module_name
         if module_name == Scripts.lastReload:
             Scripts.lastReload = self
-            MenuProperties.ScriptsFrame.OnUpdateScript(self)
+            Menus.Scripts.OnUpdateScript(self)
         return True
 
     def reload(self):
         if self.module:
+            Scripts.addReload(self.name)
             Scripts.lastReload = self.module
             importlib.reload(Scripts.modules[self.module])
             del self
@@ -2282,9 +2286,10 @@ class Script:
             script.cinterval = time.time_ns() + script.interval
             for task in script.tasks:
                 try:
-                    task(Game.getPlayerClient(), script.interval)
-                except:
-                    print("Unexpected error:", sys.exc_info()[0])
+                    task(g_game.getPlayer(), script.interval)
+                except BaseException:
+                    print(traceback.print_exc())
+                    #print("<Script.update %s> Unexpected error:" % script.getName(), sys.exc_info()[0])
 
     @staticmethod
     def loadscripts():
@@ -2304,11 +2309,11 @@ class Script:
 
 # Constants
 WAYPOINT_MAX_DISTANCE = 30
-WAYPOINT_TYPE_STAND = 0
-WAYPOINT_TYPE_BUYPOT = 1
-WAYPOINT_TYPE_ACTION = 2
-WAYPOINT_TYPE_NODE = 3
-WAYPOINT_TYPE_NEXT = 4
+WAYPOINT_STAND = 0
+WAYPOINT_BUYPOT = 1
+WAYPOINT_ACTION = 2
+WAYPOINT_NODE = 3
+WAYPOINT_NEXT = 4
 
 WAYPOINT_TYPENAMES = ["Stand", "Pots", "Action", "Node", "Next"]
 
@@ -2350,16 +2355,8 @@ class WaypointAction:
 
 class Waypoint:
 
-    Colours = {
-        #WAYPOINT_TYPE_STAND: wx.NullColour
-        WAYPOINT_TYPE_ACTION: wx.Colour(240, 128, 128),
-        WAYPOINT_TYPE_BUYPOT: wx.Colour(30, 219, 142),
-        WAYPOINT_TYPE_NODE: wx.Colour(0, 150, 200),
-        WAYPOINT_TYPE_NEXT: wx.Colour(100, 0, 200)
-    }
-
     """Este objeto almacena un punto de referencia con propiedades especiales"""
-    def __init__(self, position=Position(), type=WAYPOINT_TYPE_STAND):
+    def __init__(self, position=Position(), type=WAYPOINT_STAND):
         self.position = position
         self.node_position = None
         self.type = type
@@ -2369,16 +2366,16 @@ class Waypoint:
         self.updateColour()
 
     def updateColour(self):
-        if self.type in Waypoint.Colours:
-            self.colour = Waypoint.Colours[self.type]
-            if self.getNodePos():
-                nodeColour = Waypoint.Colours[WAYPOINT_TYPE_NODE]
-                self.colour = wx.Colour(self.colour[0]+nodeColour[0], self.colour[1]+nodeColour[1], self.colour[2]+nodeColour[2])
+        if self.type in g_waypoints.colours:
+            self.colour = g_waypoints.colours[self.type]
 
     def __str__(self):
         return str(self.position)
 
     def getPosition(self) -> Position:
+        if g_waypoints.relative:
+            pos = self.position
+            return Position(pos.x, pos.y, Player.Position().z)
         return self.position
 
     def getType(self) -> int:
@@ -2389,7 +2386,7 @@ class Waypoint:
 
     def setAction(self, action):
         self.action = action
-        self.type = WAYPOINT_TYPE_ACTION
+        self.type = WAYPOINT_ACTION
         self.updateColour()
 
     def setColour(self, colour):
@@ -2398,131 +2395,116 @@ class Waypoint:
     def getColour(self):
         return self.colour
 
-    def getDistance(self, position) -> int:
+    def getDistance(self, position):
         return self.position.getDistance(position)
 
-    def getInfo(self, beforeWaypoint, hereWaypoint) -> str:
+    def getInfo(self, b_waypoint, is_current):
         pos = self.getPosition()
-        bpos = not beforeWaypoint and pos or beforeWaypoint.getPosition()
-        return "%s [%s] x%s y%s z%s%s" % ((hereWaypoint and emoji.emojize(":fast_forward:", use_aliases=True, variant="emoji_type") or ''), WAYPOINT_TYPENAMES[self.getType()], pos.x, pos.y, pos.z, (pos.getDistance(bpos) > WAYPOINT_MAX_DISTANCE and emoji.emojize(" :x: ", use_aliases=True, variant="emoji_type") or ' '))
+        b_pos = not b_waypoint and pos or b_waypoint.getPosition()
+        return "%s [%s] x%s y%s z%s%s" % ((is_current and emoji.emojize(":fast_forward:", use_aliases=True, variant="emoji_type") or ''), WAYPOINT_TYPENAMES[self.type], pos.x, pos.y, pos.z, (pos.getDistance(b_pos) > WAYPOINT_MAX_DISTANCE and emoji.emojize(" :x: ", use_aliases=True, variant="emoji_type") or ' '))
 
     def getNodePos(self):
         return self.node_position
 
     def setNodePos(self, pos):
-        if isinstance(pos, Position):
-            self.node_position = pos
-            return
-        raise ValueError("El parametro pasado no es un objeto de tipo 'Position'")
+        self.node_position = pos
 
-    def setType(self, wtype):
-        self.type = wtype
+    def setType(self, type):
+        self.type = type
 
     def isNode(self):
-        return self.type == WAYPOINT_TYPE_NODE
+        return self.type == WAYPOINT_NODE
 
     def isNext(self):
-        return self.type == WAYPOINT_TYPE_NEXT
+        return self.type == WAYPOINT_NEXT
 
 class Waypoints:
-    """Este objeto se encargara de almacenar los puntos de referencia
-    en el mapa"""
 
-    waypoints = []
-    currentWaypoint = 0
-    lastPositionRec = False
-    lastGotoPos = None
-    reverseAdded = []
+    def __init__(self):
+        self.waypoints = []
+        self.current = 0
+        self.last = 0
+        self.record = False
+        self.lastRecord = None
+        self.lastGotoPos = None
+        self.reverse_waypoints = []
+        self.relative = False
+        self.warning = False
+        self.colours = {
+            WAYPOINT_STAND: wx.NullColour,
+            WAYPOINT_ACTION: wx.Colour(240, 128, 128),
+            WAYPOINT_BUYPOT: wx.Colour(30, 219, 142),
+            WAYPOINT_NODE: wx.Colour(0, 150, 200),
+            WAYPOINT_NEXT: wx.Colour(100, 0, 200)
+        }
 
-    @staticmethod
-    def next():
-        """Vamos al siguiente punto, y chequiamos"""
-        Waypoints.currentWaypoint += 1
-        Waypoints.check()
-        return Waypoints.currentWaypoint
-    
-    @staticmethod
-    def check():
-        """Si esta fuera de rango, entonces comenzemos de nuevo"""
-        if not index_in_list(Waypoints.waypoints, Waypoints.currentWaypoint):
-            Waypoints.currentWaypoint = 0
+    def count(self):
+        return len(self.waypoints)
 
-    @staticmethod
-    def getWaypoints() -> Waypoint:
-        return Waypoints.waypoints
+    def append(self, waypoint):
+        self.waypoints.append(waypoint)
 
-    @staticmethod
-    def addWaypoint(waypoint):
-        if isinstance(waypoint, list):
-            for w in waypoint:
-                Waypoints.waypoints.append(w)
+    def clear(self):
+        self.waypoints.clear()
+
+    def get(self, index=None):
+        try:
+            if index is None:
+                return self.waypoints[self.current]
+            return self.waypoints[index]
+        except IndexError:
+            self.update()
+            return self.waypoints[self.current]
+
+    def update(self):
+        self.last = self.current
+        if self.current < self.count() - 1:
+            self.current += 1
+            return True
+        self.current = 0
+        return False
+
+    def getNext(self):
+        if self.count() > 1:
+            waypoint = self.get()
+            player_pos = Player.Position()
+            position = waypoint.getPosition()
+            while position.z != player_pos.z or position.getDistance(player_pos) > WAYPOINT_MAX_DISTANCE:
+                if not self.update():
+                    if not self.warning:
+                        self.warning = True
+                        print("All waypoints are out of your reach.")
+                    return
+                waypoint = self.get()
+                position = waypoint.getPosition()
+            self.warning = False
+            type = waypoint.getType()
+            if (type == WAYPOINT_ACTION and player_pos.getDistance(position) <= 1):
+                pos_on_window = position.getPositionOnWindow()
+                Send_RightClick(pos_on_window.x, pos_on_window.y)
+                time.sleep(GAME_WAIT_ACTION)
+                Send_RightClick(pos_on_window.x, pos_on_window.y)
+                self.update()
+                wx.CallAfter(Menus.CaveBot.UpdateWaypointTwo, waypoint, self.last, self.get(), self.current)
+            elif player_pos == position or player_pos.getDistance(position) <= 1:
+                if type == WAYPOINT_BUYPOT:
+                    g_game.buy_pots = True
+                    print("You have reached a charging waypoint.")
+                    g_dispatcher.addTask(0, Client.speak, "Punto de recarga encontrado, espere un momento.")
+                self.update()
+                wx.CallAfter(Menus.CaveBot.UpdateWaypointTwo, waypoint, self.last, self.get(), self.current)
+            return self.get()
         else:
-            Waypoints.waypoints.append(waypoint)
-
-    @staticmethod
-    def removeWaypoint(index=-1):
-        if isinstance(index, int):
-            Waypoints.waypoints.pop(index)
-        elif isinstance(index, Position):
-            Waypoints.waypoints.remove(index)
-
-    @staticmethod
-    def getCurrentWaypoint() -> Waypoint:
-        if index_in_list(Waypoints.waypoints, Waypoints.currentWaypoint):
-            return Waypoints.waypoints[Waypoints.currentWaypoint]
-
-    @staticmethod
-    def getNextWaypoint() -> Waypoint:
-        Waypoints.check()
-        waypoint = Waypoints.getCurrentWaypoint()
-        if not waypoint:
-            if __DEBUG__:
-                print("[CaveBot]: no existe ningun 'waypoint' en la lista.")
+            print("There are not enough waypoints.")
             return
-        skipWaypoint = False
-        playerPos = Player.Position()
-        waypointPos = waypoint.getPosition()
-        waypointNode = waypoint.getNodePos()
-        if (playerPos == waypointPos or (waypointNode and playerPos == waypointNode)):
-            Memory.setNumber(ADDRESS_PLAYERUPDATE_POSZ, playerPos.getZ())
-            waypointType = waypoint.getType()
-            if waypointType == WAYPOINT_TYPE_BUYPOT:
-                Game.IsBuyPots = True
-                if __DEBUG__:
-                    print("[Waypoints]: buy potion start!")
-            elif waypoint.isNext():
-                DataBot.LoadCaveBotFromFile(waypoint.next_ways)
-                currentWaypoint = 0
-                lastPositionRec = False
-                reverseAdded = []
-                return
-            skipWaypoint = True
-        elif playerPos.z != waypointPos.z or waypointPos.getDistance(playerPos) > WAYPOINT_MAX_DISTANCE:
-            skipWaypoint = True
-            if __DEBUG__:
-                print("[Waypoints]: invalid waypoints connection ( %s >> %s )" % (playerPos, waypointPos))
-        if skipWaypoint:
-            beforeIndex = Waypoints.currentWaypoint
-            afterIndex = Waypoints.next()
-            wx.CallAfter(MenuProperties.CaveBotFrame.UpdateWaypointTwo, waypoint, beforeIndex, Waypoints.getCurrentWaypoint(), afterIndex)
-            return
-        return waypoint
 
-    @staticmethod
-    def running(player):
-        if len(Waypoints.waypoints) > 1:
-            waypoint = Waypoints.getNextWaypoint()
-            if waypoint:
-                if not Game.StopWalking and not Game.IsBuyPots:
-                    wPosition = waypoint.getPosition()
-                    Player.setGotoPosition(wPosition)
-                    player.setWalking(True)
-                    if __DEBUG__:
-                        if not Waypoints.lastGotoPos or Waypoints.lastGotoPos != wPosition:
-                            Waypoints.lastGotoPos = wPosition
-                            print("[CaveBot/Goto]: %s" % wPosition)
-            elif __DEBUG__:
-                print("[CaveBot/NoFound]: no found next waypoint!")
+    def run(self, player):
+        waypoint = g_waypoints.getNext()
+        if waypoint:
+            Player.setGotoPosition(Position(waypoint.getPosition()) + choice(tuple(EMPLACEMENT_OFFSETS.values())))
+            player.setWalking(True)
+
+g_waypoints = Waypoints()
 
 #ooooo                                o8   o88                           
 # 888          ooooooo     ooooooo  o888oo oooo  oo oooooo     oooooooo8 
@@ -2557,45 +2539,39 @@ class Looting:
 
 class Targeting:
 
-    monsterList = []
+    def __init__(self):
+        self.monster_types = []
 
-    @staticmethod
-    def addMonster(targetMonster):
-        if not Targeting.monsterList:
-            Targeting.monsterList.append(targetMonster)
-            return True
-        for index, tm in enumerate(Targeting.monsterList):
-            if tm.getName() == targetMonster.getName():
-                Targeting.monsterList[index] = targetMonster
-                return True
-        Targeting.monsterList.append(targetMonster)
+    def add(self, m_type_new):
+        if self.monster_types:
+            for index, m_type in enumerate(self.monster_types):
+                if m_type.name == m_type_new.name:
+                    self.monster_types[index] = m_type_new
+                    return True
+        self.monster_types.append(m_type_new)
         return True
 
-    @staticmethod
-    def removeMonster(targetMonster):
-        Targeting.monsterList.remove(targetMonster)
+    def remove(self, m_type):
+        return self.monster_types.remove(m_type)
 
-    @staticmethod
-    def removeMonsterByIndex(index):
-        Targeting.monsterList.pop(index)
+    def removeByIndex(self, index):
+        return self.monster_types.pop(index)
 
-    @staticmethod
-    def getMonsters():
-        return Targeting.monsterList
+    def get(self, index_or_name=None):
+        if index_or_name is None:
+            return self.monster_types
+        elif isinstance(index_or_name, int):
+            return self.monster_types[index_or_name]
+        elif isinstance(index_or_name, str):
+            for m_type in self.monster_types:
+                if m_type.name == index_or_name:
+                    return m_type
 
-    @staticmethod
-    def getMonsterByIndex(index):
-        return Targeting.monsterList[index]
-
-    @staticmethod
-    def getMonsterByName(name):
-        for tm in Targeting.monsterList:
-            if tm.getName() == name:
-                return tm
+g_targeting = Targeting()
 
 class TargetMonster:
 
-    transformCount = {
+    check_count = {
         'Any': lambda l: True,
         '1': lambda l: l == 1,
         '1+': lambda l: l >= 1,
@@ -2616,8 +2592,10 @@ class TargetMonster:
     def __init__(self, name):
         self.name = name
         self.distance = -1
-        self.singleSpell = ""
-        self.pluralSpell = ""
+        self.singleSpell = "{F3}"
+        self.pluralSpell = "{F4}"
+        self.specialSingleSpell = "{F11}"
+        self.specialPluralSpell = "{F12}"
         self.ignoreCount = -1
         self.priority = 1
         self.count = "Any"
@@ -2627,56 +2605,6 @@ class TargetMonster:
         if self.count != "Any":
             return '%s >> %s' % (self.name, self.count)
         return '%s' % self.name
-
-    # >> SET <<
-    def setName(self, name):
-        self.name = name
-    
-    def setDistance(self, distance):
-        self.distance = distance
-
-    def setSingleSpell(self, spell):
-        self.singleSpell = spell
-    
-    def setPluralSpell(self, spell):
-        self.pluralSpell = spell
-    
-    def setIgnoreCount(self, ignoreCount):
-        self.ignoreCount = ignoreCount
-    
-    def setPriority(self, priority):
-        self.priority = priority
-    
-    def setCount(self, count):
-        self.count = count
-    
-    def setAction(self, action):
-        self.action = action
-    
-    # >> GET <<
-    def getName(self):
-        return self.name
-    
-    def getDistance(self):
-        return self.distance
-
-    def getSingleSpell(self):
-        return self.singleSpell
-    
-    def getPluralSpell(self):
-        return self.pluralSpell
-    
-    def getIgnoreCount(self):
-        return self.ignoreCount
-    
-    def getPriority(self):
-        return self.priority
-    
-    def getCount(self):
-        return self.count
-    
-    def getAction(self):
-        return self.action
 
 #ooooooooooo            o888                                        o8                          
 #88  888  88 ooooooooo8  888  ooooooooo8 oo ooo oooo   ooooooooo8 o888oo oo oooooo  oooo   oooo 
@@ -2705,50 +2633,37 @@ class Game:
         No se si sea la mejor forma de tratar esto, pero es una opcion temporal, asi la llamare yo: GameTempConfig
     """
 
-    # Player Status
-    IsLooting = False
-    IsAttacking = False
-    IsBuyPots = False
+    def __init__(self):
+        """Flags"""
+        self.attacking = False
+        self.buy_pots = False
+        self.looting = False
+        self.stop_walking = False
+        """Cache"""
+        self.cache_players = []
+        self.cache_creatures = []
+        self.cache_monsters = []
+        self.cache_npcs = []
+        self.cache_targets = []
+        self.cache_corpses = []
+        """Items"""
+        self.items = []
+        """Chat"""
+        self.last_chat_index = -1
+        self.last_chat_content = deque()
+        self.last_private_name = ""
+        """Telemetry"""
+        self.telemetry_messages = []
+        """Licence"""
+        self.name = ""
+        self.key = ""
 
-    StopWalking = False
-    StopAttacking = False
-
-    # Bot Mods
-    Waypoints_Enabled = True
-    RecWaypoints = False
-
-    #Cache
-    CacheCreatures = []
-    CacheLastCreatures = []
-    CacheCorpses = []
-    
-    LastCorpse = []
-    CheckLastCorpseOpened = 0
-    CheckCorpseLooting = 0
-
-    CacheBattleList = []
-
-    Items = {
-        'ghp': 239,
-        'gmp': 238,
-        'mw': 3180
-    }
-
-    #Messages
-    LastChatIndex = 0
-    LastChatContent = []
-
-    #Area de telemetria
-    TelemetryMessages = []
-
-    """Aqui finaliza en apartado de variables estaticas de esta clase"""
-    # Obtener el player del cliente
-    @staticmethod
-    def getPlayerClient() -> Player:
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
-        if playerId == Player.CachePlayerID:
-            return Player.CachePlayer
-        elif playerId == 0:
+    def getPlayer(self):
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
+        if player_id == Player.CachePlayerID:
+            if Player.CachePlayer.getName() == Player.CachePlayerName:
+                return Player.CachePlayer
+        elif player_id == 0:
             Memory.loadGameClient()
             Client.updateApp()
             #Client.updateAssistApp()
@@ -2756,162 +2671,147 @@ class Game:
             return
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             player = Player(index)
-            if player.getId() == playerId:
-                MenuProperties.MainMenu.SetTitle(u"%s BOT - %s" % (GAME_TITLE, player.getName()))
-                MenuProperties.MainMenu.UpdatePlayerName(player)
+            if player.getId() == player_id:
+                player_name = player.getName()
+                Menus.Main.SetTitle(u"%s BOT - %s" % (GAME_TITLE, player_name))
+                Menus.Main.UpdatePlayerName(player)
                 Player.CachePlayer = player
-                Player.CachePlayerID = player.getId()
+                Player.CachePlayerID = player_id
+                Player.CachePlayerName = player_name
                 Player.lastExp = player.getExperience()
                 return player
-        """En cualquier caso devolvamos el player guardado en la cache, para que algunos metodos del player globales aun puedan usarse"""
-        return
 
-    # Buscar un player con el nombre
-    @staticmethod
-    def getPlayerByName(playerName: str = "") -> Player:
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
+    def getPlayerByName(self, playerName=""):
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             offset = int(ADDRESS_BATTLELIST_NEXT) * index
             cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
             if cid >= AUTOID_PLAYERS and cid < AUTOID_MONSTERS:
                 name = Memory.getString(offset + ADDRESS_BATTLELIST_NAME)
                 if playerName == name:
-                    return playerId == cid and Player(index) or Creature(index)
+                    return player_id == cid and Player(index) or Creature(index)
 
-    # Buscar un player con skull
-    @staticmethod
-    def getPlayerSkull(playerSkull: int = SKULL_WHITE) -> Player:
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
+    def getCreatureByName(self, creatureName=""):
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
+        for index in range(ADDRESS_BATTLELIST_MAXINDEX):
+            offset = int(ADDRESS_BATTLELIST_NEXT) * index
+            cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
+            if cid >= AUTOID_MONSTERS and cid < AUTOID_NPCS:
+                name = Memory.getString(offset + ADDRESS_BATTLELIST_NAME)
+                if creatureName == name:
+                    return Monster(index)
+            elif cid >= AUTOID_PLAYERS:
+                name = Memory.getString(offset + ADDRESS_BATTLELIST_NAME)
+                if creatureName == name:
+                    return player_id == cid and Player(index) or Creature(index)
+
+    def getPlayerSkull(self, skull=SKULL_WHITE):
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             offset = int(ADDRESS_BATTLELIST_NEXT) * index
             cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
             if cid >= AUTOID_PLAYERS and cid < AUTOID_MONSTERS:
-                skullType = Memory.getNumber(offset + ADDRESS_BATTLELIST_SKULL)
-                if (playerSkull == SKULL_NONE and skullType != SKULL_NONE) or (skullType == playerSkull):
-                    return playerId == cid and Player(index) or Creature(index)
+                skull_type = Memory.getNumber(offset + ADDRESS_BATTLELIST_SKULL)
+                if (skull == SKULL_NONE and skull_type != SKULL_NONE) or (skull_type == skull):
+                    return player_id == cid and Player(index) or Creature(index)
 
-    # Buscar una creature con el nombre
-    @staticmethod
-    def getCreatureByName(creatureName) -> Creature:
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
+    def getCreatureById(self, creatureId=0):
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             offset = int(ADDRESS_BATTLELIST_NEXT) * index
             cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
-            if cid >= AUTOID_PLAYERS:
-                name = Memory.getString(offset + ADDRESS_BATTLELIST_NAME)
-                if creatureName == name:
-                    return playerId == cid and Player(index) or Creature(index)
+            if cid >= AUTOID_MONSTERS and cid < AUTOID_NPCS and cid == creatureId:
+                return Monster(index)
+            elif cid >= AUTOID_PLAYERS and cid == creatureId:
+                return player_id == cid and Player(index) or Creature(index)
 
-    # Buscar una creature con la ID
-    @staticmethod
-    def getCreatureById(creatureId) -> Creature:
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
+    def getCreatures(self, on_screen=False, around=[7, 5], filter=None):
+        self.cache_creatures.clear()
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
+        player_pos = Player.Position()
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             offset = int(ADDRESS_BATTLELIST_NEXT) * index
             cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
-            if cid >= AUTOID_PLAYERS and cid == creatureId:
-                return playerId == cid and Player(index) or Creature(index)
-
-    # Obtener una lista con todas las creatures de la memoria
-    @staticmethod
-    def getCreatures(OnScreen=False, Around=[7, 5], Filter=None) -> Creature:
-        creatures = []
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
-        playerPos = Player.Position()
-        for index in range(ADDRESS_BATTLELIST_MAXINDEX):
-            offset = int(ADDRESS_BATTLELIST_NEXT) * index
-            cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
-            creature = cid == playerId and Player(index) or Creature(index)
-            if creature.isCreature() and (not Filter or Filter(creature)):
-                if OnScreen:
+            creature = cid == player_id and Player(index) or Creature(index)
+            if creature.isCreature() and (not filter or filter(creature)):
+                if on_screen:
                     position = creature.getPosition()
-                    if creature.isVisible() and position.z == playerPos.z:
+                    if creature.isVisible() and position.z == player_pos.z:
                         if creature.getHppc() > 0:
-                            if position.getDistanceX(playerPos) <= Around[0] and position.getDistanceY(playerPos) <= Around[1]:
-                                creatures.append(creature)
+                            if position.getDistanceX(player_pos) <= around[0] and position.getDistanceY(player_pos) <= around[1]:
+                                self.cache_creatures.append(creature)
                 else:
-                    creatures.append(creature)
-        Game.CacheCreatures = creatures
-        return creatures
+                    self.cache_creatures.append(creature)
+        return self.cache_creatures
 
-    @staticmethod
-    def getCreaturesCache(OnScreen=False, Around=[7, 5]):
+    def getCacheCreatures(self, on_screen=False, around=[7, 5], filter=None):
         creatures = []
-        playerPos = Player.Position()
-        for creature in Game.CacheCreatures:
-            if creature.isCreature():
-                if OnScreen:
+        player_pos = Player.Position()
+        for creature in self.cache_creatures:
+            if creature.isCreature() and (not filter or filter(creature)):
+                if on_screen:
                     position = creature.getPosition()
-                    if creature.isVisible() and position.z == playerPos.z:
+                    if creature.isVisible() and position.z == player_pos.z:
                         if creature.getHppc() > 0:
-                            if position.getDistanceX(playerPos) <= Around[0] and position.getDistanceY(playerPos) <= Around[1]:
+                            if position.getDistanceX(player_pos) <= around[0] and position.getDistanceY(player_pos) <= around[1]:
                                 creatures.append(creature)
                 else:
                     creatures.append(creature)
         return creatures
 
-    # Obtener una lista con todas las players de la memoria
-    @staticmethod
-    def getPlayers(OnScreen=False, Around=[7, 5], Filter=None) -> Player:
-        players = []
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
-        playerPos = Player.Position()
+    def getPlayers(self, on_screen=False, around=[7, 5], filter=None):
+        self.cache_players.clear()
+        player_id = Memory.getNumber(ADDRESS_PLAYERID)
+        player_pos = Player.Position()
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             offset = int(ADDRESS_BATTLELIST_NEXT) * index
             cid = Memory.getNumber(offset + ADDRESS_BATTLELIST_CID)
-            player = cid == playerId and Player(index) or Creature(index)
-            if player.isPlayer() and (not Filter or Filter(player)):
-                if OnScreen:
+            player = cid == player_id and Player(index) or Creature(index)
+            if player.isPlayer() and (not filter or filter(player)):
+                if on_screen:
                     position = player.getPosition()
-                    if player.isVisible() and position.z == playerPos.z:
+                    if player.isVisible() and position.z == player_pos.z:
                         if player.getHppc() > 0:
-                            if position.getDistanceX(playerPos) <= Around[0] and position.getDistanceY(playerPos) <= Around[1]:
-                                players.append(player)
+                            if position.getDistanceX(player_pos) <= around[0] and position.getDistanceY(player_pos) <= around[1]:
+                                self.cache_players.append(player)
                 else:
-                    players.append(player)
-        return players
+                    self.cache_players.append(player)
+        return self.cache_players
 
-    # Obtener una lista con todas los monsters de la memoria
-    @staticmethod
-    def getMonsters(OnScreen=False, Around=[7, 5], Filter=None) -> Creature:
-        monsters = []
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
-        playerPos = Player.Position()
+    def getMonsters(self, on_screen=False, around=[7, 5], filter=None):
+        self.cache_monsters.clear()
+        player_pos = Player.Position()
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
-            monster = Creature(index)
-            if monster.isMonster() and (not Filter or Filter(monster)):
-                if OnScreen:
+            monster = Monster(index)
+            if monster.isMonster() and (not filter or filter(monster)):
+                if on_screen:
                     position = monster.getPosition()
-                    if monster.isVisible() and position.z == playerPos.z:
+                    if monster.isVisible() and position.z == player_pos.z:
                         if monster.getHppc() > 0:
-                            if position.getDistanceX(playerPos) <= Around[0] and position.getDistanceY(playerPos) <= Around[1]:
-                                monsters.append(monster)
+                            if position.getDistanceX(player_pos) <= around[0] and position.getDistanceY(player_pos) <= around[1]:
+                                self.cache_monsters.append(monster)
                 else:
-                    monsters.append(monster)
-        return monsters
+                    self.cache_monsters.append(monster)
+        return self.cache_monsters
 
-    # Obtener una lista con todas los npc's de la memoria
-    @staticmethod
-    def getNpcs(OnScreen=False, Around=[7, 5]) -> Creature:
-        npcs = []
-        playerId = Memory.getNumber(ADDRESS_PLAYERID)
-        playerPos = Player.Position()
+    def getNpcs(self, on_screen=False, around=[7, 5], filter=None):
+        self.cache_npcs.clear()
+        player_pos = Player.Position()
         for index in range(ADDRESS_BATTLELIST_MAXINDEX):
             npc = Creature(index)
-            if npc.isNpc():
-                if OnScreen:
+            if npc.isNpc() and (not filter or filter(npc)):
+                if on_screen:
                     position = npc.getPosition()
-                    if npc.isVisible() and position.z == playerPos.z:
+                    if npc.isVisible() and position.z == player_pos.z:
                         if npc.getHppc() > 0:
-                            if position.getDistanceX(playerPos) <= Around[0] and position.getDistanceY(playerPos) <= Around[1]:
-                                npcs.append(npc)
+                            if position.getDistanceX(player_pos) <= around[0] and position.getDistanceY(player_pos) <= around[1]:
+                                self.cache_npcs.append(npc)
                 else:
-                    npcs.append(npc)
-        return npcs
+                    self.cache_npcs.append(npc)
+        return self.cache_npcs
 
-    @staticmethod
-    def getEnemies():
-        players = Game.getPlayers(True)
+    def getEnemies(self):
+        players = g_game.getPlayers(True)
         found_enemies = []
         if len(players) >= 2:
             for player in players:
@@ -2919,87 +2819,35 @@ class Game:
                     found_enemies.append(player)
         return found_enemies
 
-    @staticmethod
-    def closeContainer():
+    def closeContainer(self):
         closeContainerPos = SCREEN_OPTIONS['closeContainer']
-        return Client.leftClick(closeContainerPos[0], closeContainerPos[1])
+        return Send_LeftClick(closeContainerPos[0], closeContainerPos[1])
 
-    #@ Metodo special para mover cosas, probablemente no este muy optimizado, pero funciona rapido
-    #@ Parametros requeridos: Thing(), Position()
-    @staticmethod
-    def playerMoveThing(thing, toPos):
-        itemId = thing.getId()
-        count = thing.getCount()
-        fromPos = thing.getPosition()
-        Memory.setNumber(0x6D4604, itemId) # ItemId/Type
-        Memory.setNumber(0x6D4600, count) # ItemCount/CreatureId
-        Memory.setNumber(0x54C250, fromPos.x) # PositionX/ContainerPos
-        Memory.setNumber(0x54C2A8, fromPos.y) # PositionY/ContainerIndex
-        Memory.setNumber(0x54C280, fromPos.z) # PositionZ/ContainerSlot
+    def playerMoveThing(self, thing, to_pos):
+        from_pos = thing.getPosition()
+        Memory.setNumber(ADDRESS_ID_ONLOOKCLICK, thing.getId()) # ItemId/Type
+        Memory.setNumber(ADDRESS_COUNT_ONLOOKCLICK, thing.getCount()) # ItemCount/CreatureId
+        Memory.setNumber(ADDRESS_MOUSE_THINGFOCUS_POSX, from_pos.x) # PositionX/ContainerPos
+        Memory.setNumber(ADDRESS_MOUSE_THINGFOCUS_POSY, from_pos.y) # PositionY/ContainerIndex
+        Memory.setNumber(ADDRESS_MOUSE_THINGFOCUS_POSZ, from_pos.z) # PositionZ/ContainerSlot
         Memory.setNumber(0x54C2B4, 2)
         Memory.setNumber(0x54C23C, 2)
         Memory.setNumber(0x54C23C, 6)
         Memory.setNumber(0x54C294, 6)
-        Client.fastClickLoot(toPos.x, toPos.y)
+        Send_FastLeftClick(to_pos.x, to_pos.y)
 
-    @staticmethod
-    def getThingLook() -> Thing:
+    def getThingLook(self):
         return Thing(Memory.getNumber(ADDRESS_ID_ONLOOKCLICK), Memory.getNumber(ADDRESS_COUNT_ONLOOKCLICK))
 
-    @staticmethod
-    def getCacheLastCreatures():
-        return Game.CacheLastCreatures
-
-    @staticmethod
-    def addCacheLastCreatures(creature: Creature):
-        if Game.CacheLastCreatures:
-            for other in Game.CacheLastCreatures:
-                if other.getId() == creature.getId():
-                    return False
-        Game.CacheLastCreatures.append(creature)
-        return True
-
-    @staticmethod
-    def popCacheLastCreatures(creature: Creature):
-        if Game.CacheLastCreatures:
-            for index, other in enumerate(Game.CacheLastCreatures):
-                if other.getId() == creature.getId():
-                    Game.CacheLastCreatures.pop(index)
-                    return True
+    def popCache(self, type, pop_item):
+        cache = self.getCache(type)
+        for index, item in enumerate(cache):
+            if pop_item.getId() == item.getId():
+                cache.pop(index)
+                return True
         return False
 
-    @staticmethod
-    def getCacheCorpses():
-        return Game.CacheCorpses
-
-    @staticmethod
-    def addCacheCorpses(corpse):
-        collision = []
-        if Game.CacheCorpses:
-            for other in Game.CacheCorpses:
-                if other.getId() == corpse.getId():
-                    return False
-                elif not other.isExpire() and other.getPosition() == corpse.getPosition():
-                    collision.append(other)
-        if collision:
-            for other in collision:
-                other.setCreateTime(0)
-                other.setLooted(True)
-                if __DEBUG__:
-                    print('The corpse %s has expire.' % other.getId())
-        Game.CacheCorpses.append(corpse)
-        return True
-
-    @staticmethod
-    def popCacheCorpses(corpse):
-        if Game.CacheCorpses:
-            for index, other in enumerate(Game.CacheCorpses):
-                if other.getId() == corpse.getId():
-                    Game.CacheCorpses.pop(index)
-                    return True
-        return False
-
-    def shutdown():
+    def shutdown(self):
         if OS_WINDOWS:
             #os.kill(BOT_PID, signal.CTRL_BREAK_EVENT)
             os.kill(BOT_PID, signal.CTRL_C_EVENT)
@@ -3007,75 +2855,66 @@ class Game:
             #os.kill(BOT_PID, signal.SIGINT)
             os.kill(BOT_PID, signal.SIGBREAK)
 
-    def updateLastChatContent(newMsg: str = ""):
-        if newMsg:
-            Game.LastChatContent.append(newMsg)
-        if len(Game.LastChatContent) > 10:
-            Game.LastChatContent.pop(0)
+    def updateLastChatContent(self, new_msg=""):
+        if new_msg:
+            self.last_chat_content.appendleft(new_msg)
+            if len(self.last_chat_content) > 100:
+                self.last_chat_content.pop()
+            send_to_player = lstring.match(new_msg, "*(.-)*")
+            if send_to_player and send_to_player == new_msg[1:len(send_to_player) +1]:
+                g_game.last_private_name = send_to_player
 
-    def changeChatContentIndex(direction: bool = True):
-        if Game.LastChatContent:
-            if direction:
-                MenuProperties.MainMenu.chatContent.ChangeValue(Game.LastChatContent[::-1][Game.LastChatIndex])
-                Game.LastChatIndex = min(Game.LastChatIndex +1, len(Game.LastChatContent)-1)
+    def changeChatContentIndex(self, step=1):
+        if self.last_chat_content:
+            if step >= 1:
+                self.last_chat_index = min(len(self.last_chat_content) -1, self.last_chat_index + step)
+            elif step <= -1:
+                self.last_chat_index = max(-1, self.last_chat_index + step)
+            if self.last_chat_index == -1:
+                Menus.Main.chatContent.ChangeValue('')
             else:
-                if Game.LastChatIndex == 0:
-                    MenuProperties.MainMenu.chatContent.ChangeValue("")
-                    return
-                Game.LastChatIndex = max(0, Game.LastChatIndex -1)
-                MenuProperties.MainMenu.chatContent.ChangeValue(Game.LastChatContent[::-1][Game.LastChatIndex])
+                Menus.Main.chatContent.ChangeValue(self.last_chat_content[self.last_chat_index])
+            Menus.Main.chatContent.SetInsertionPointEnd()
 
-    def getTelemetryMessages():
-        return Game.TelemetryMessages
-
-    def addTelemetryMessage(telemetryMessage):
-        if not isinstance(telemetryMessage, TelemetryMessage):
-            print("[GameBot]: estas intentando introducir a la lista de mensajes de telemetria un objeto que no es de mensaje de telemetria.")
-            return
-        return Game.TelemetryMessages.append(telemetryMessage)
-
-    def readTelemetryMessages(index=None):
-        if not Game.TelemetryMessages:
-            return
-        if index:
-            if index in Game.TelemetryMessages:
-                telemetryMessage = Game.TelemetryMessages[index]
-                Client.speak(telemetryMessage.getMessage())
-                Game.TelemetryMessages.pop(index)
-                return
-        telemetryMessage = Game.TelemetryMessages[0]
-        Client.speak(telemetryMessage.getMessage())
-        Game.TelemetryMessages.pop(0)
-
-    def isOpenInventory():
+    def isOpenInventory(self):
         return Memory.getNumber(ADDRESS_INVENTORY_TOGGLE, ADDRESS_INVENTORY_OFFSETS) == SCREEN_OPTIONS['isOpenInventory']
 
-    def isExistContainerOpened():
-        if Game.isOpenInventory():
-            Game.toogleInventory()
+    def isExistContainerOpened(self):
+        if self.isOpenInventory():
+            self.toogleInventory()
             time.sleep(0.1)
         return Memory.getNumber(ADDRESS_SPACE_CONTAINER, ADDRESS_SPACE_CONTAINER_OFFSETS) < SCREEN_OPTIONS['isExistContainerOpened']
 
-    def toogleInventory():
+    def toogleInventory(self):
         toogleInventory = SCREEN_OPTIONS['toogleInventory']
-        Client.fastClickLoot(toogleInventory[0], toogleInventory[1])
+        Send_LeftClick(toogleInventory[0], toogleInventory[1])
+
+    def getDialogType(self):
+        if Memory.getNumber(GAME_ADDRESS_DIALOG_TYPE) >= GAME_DIALOG_CLASSIC:
+            return DIALOG_CLASSIC
+        return DIALOG_UNKNOW
 
     # EXTRAS
-    def isWarningPlayerOnScreen():
-        return MenuProperties.ExtrasFrame.warningPlayerScreen.IsChecked()
+    def isWarningPlayerOnScreen(self):
+        return Menus.Extras.warningPlayerScreen.IsChecked()
 
-    def isShowNotifications():
-        return MenuProperties.ExtrasFrame.showNotifications.IsChecked()
+    def isShowNotifications(self):
+        return Menus.Extras.showNotifications.IsChecked()
 
-    def isTeleportToTemple():
-        return MenuProperties.ExtrasFrame.teleportToTemple.IsChecked()
+    def isTeleportToTemple(self):
+        return Menus.Extras.teleportToTemple.IsChecked()
+
+    def isSpeakMessages(self):
+        return Menus.Extras.speakMessages.IsChecked()
 
     # CAVEBOT
-    def getAutoLootStatus():
-        return MenuProperties.CaveBotFrame.autolootStatus.IsChecked()
+    def getAutoLootStatus(self):
+        return Menus.CaveBot.autolootStatus.IsChecked()
 
-    def getCheckWaypoints():
-        return MenuProperties.CaveBotFrame.CheckBoxWaypoints.IsChecked()
+    def getCheckWaypoints(self):
+        return Menus.CaveBot.follow_waypoints.IsChecked()
+
+g_game = Game()
 
 # oooooooo8 o88                                      o888  
 #888        oooo    oooooooo8 oo oooooo    ooooooo    888  
@@ -3134,9 +2973,11 @@ class Signal:
         g_yasuo.running = False
         g_k6.running = False
         g_sett.running = False
-        PROCESS.close()
+        if PROCESS:
+            PROCESS.close()
         App = wx.GetApp()
-        App.ExitMainLoop()
+        if App:
+            App.ExitMainLoop()
 
 #                               ooooooooooo                                 
 #oooo  o  oooo oooo   oooo       888    88 ooooooo    ooooooo    ooooooooo8 
@@ -3153,6 +2994,8 @@ def queueCheckEnclosures(self, q):
                 Script.update(script)
                 q.task_done()
                 q.put(name)
+            elif Scripts.getScriptInReload(name):
+                q.put(name)
         time.sleep(THREAD_MIN_TICKS)
 
 class CreateThread(threading.Thread):
@@ -3160,21 +3003,22 @@ class CreateThread(threading.Thread):
         threading.Thread.__init__(self, target=queueCheckEnclosures, args=(self, Scripts.enclosure_queue,))
         self.running = False
 
-class MenuProperties:
+class Menus:
     Font = "Operator Mono Light"
     FontSize = 8
-    ChooseFrame = None
     AdminMode = False
-    MainMenu = None
-    ExtrasFrame = None
-    HealingFrame = None
-    CaveBotMenu = None
-    TargetingFrame = None
-    ScriptsFrame = None
+    Choose = None
+    Main = None
+    Extras = None
+    Healing = None
+    CaveBot = None
+    Targeting = None
+    Scripts = None
     """Colours"""
     ScriptOffColour = wx.Colour(48, 55, 46)
     ScriptOnColour = wx.Colour(22, 160, 133)
     ScriptLockedColour = wx.Colour(220, 20, 60)
+    ButtonDefaultColour = wx.Colour(240, 240, 240)
     """Strings"""
     ScriptRunningText = emoji.emojize(":white_check_mark:", use_aliases=True, variant="emoji_type")
     ScriptPauseText = emoji.emojize(":black_large_square:", use_aliases=True, variant="emoji_type")
@@ -3194,7 +3038,7 @@ class GuiChooseMenu(wx.Frame):
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         self.clientList = wx.ListBox(Panel, wx.ID_ANY, (5, 5), (220, 100), [], style=wx.LB_SINGLE|wx.LB_OWNERDRAW)
         self.clientList.Bind(wx.EVT_LISTBOX_DCLICK, self.OnSelectClient)
         self.Show()
@@ -3215,7 +3059,7 @@ class GuiChooseMenu(wx.Frame):
         Player.CachePlayer = None
         Main.run()
         self.Hide()
-        MenuProperties.MainMenu.Show()
+        Menus.Main.Show()
 
 #ooo_____ooo_________________________
 #oooo___oooo__ooooo__oo_ooo__oo____o_
@@ -3234,13 +3078,13 @@ class GuiMainMenu(wx.Frame):
         self.SetIcon(self.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         ButtonHealing = wx.Button(Panel, wx.ID_ANY, "Healing", (2, 0), (60, 20))
         ButtonHealing.Bind(wx.EVT_BUTTON, self.OnShowHideHealing)
         ButtonExtras = wx.Button(Panel, wx.ID_ANY, "Extras", (2, 20), (60, 20))
         ButtonExtras.Bind(wx.EVT_BUTTON, self.OnShowHideExtras)
-        ButtonCaveBot = wx.Button(Panel, wx.ID_ANY, "CaveBot", (2, 40), (60, 20))
-        ButtonCaveBot.Bind(wx.EVT_BUTTON, self.OnShowHideCaveBot)
+        self.cave_bot = wx.Button(Panel, wx.ID_ANY, "CaveBot", (2, 40), (60, 20))
+        self.cave_bot.Bind(wx.EVT_BUTTON, self.OnShowHideCaveBot)
         ButtonTargeting = wx.Button(Panel, wx.ID_ANY, "Targeting", (2, 60), (60, 20))
         ButtonTargeting.Bind(wx.EVT_BUTTON, self.OnShowHideTargeting)
         ButtonScripts = wx.Button(Panel, wx.ID_ANY, "Scripts", (62, 0), (60, 20))
@@ -3278,93 +3122,101 @@ class GuiMainMenu(wx.Frame):
         #Button.Bind(wx.EVT_BUTTON, onButton)
         
         # Create Sub Frames
-        MenuProperties.HealingFrame = GuiHealingMenu(self)
-        MenuProperties.ExtrasFrame = GuiExtrasMenu(self)
-        MenuProperties.CaveBotFrame = GuiCaveBotMenu(self)
-        MenuProperties.TargetingFrame = GuiTargetingMenu(self)
-        MenuProperties.ScriptsFrame = GuiScriptsMenu(self)
+        Menus.Healing = GuiHealingMenu(self)
+        Menus.Extras = GuiExtrasMenu(self)
+        Menus.CaveBot = GuiCaveBotMenu(self)
+        Menus.Targeting = GuiTargetingMenu(self)
+        Menus.Scripts = GuiScriptsMenu(self)
         # Mostrar el menu principal
         self.Show()
-        MenuProperties.MainMenu = self
+        Menus.Main = self
 
     def OnLoad(self, event):
-        player = Game.getPlayerClient()
+        player = g_game.getPlayer()
         if player:
             DataBot.LoadHealingMiscellaneousToFile(player.getName())
 
     def OnSave(self, event):
-        player = Game.getPlayerClient()
+        player = g_game.getPlayer()
         if player:
             DataBot.SaveHealingMiscellaneousToFile(player.getName())
 
     def OnToggle(self, event=None):
-        if self.IsShown():
-            self.Hide()
-        else:
-            self.Show()
+        if event or Client_Has_Focus():
+            if self.IsShown():
+                self.Hide()
+            else:
+                self.Show()
 
     def OnClose(self, event):
         """Send SIGBREAK for kill process"""
-        Game.shutdown()
+        g_game.shutdown()
     
     def OnScreenshot(self, event):
-        player = Game.getPlayerClient()
-        localtime = time.localtime(time.time())
-        ltformated = "%d%d%s%d%d%d" % (localtime.tm_mday, localtime.tm_mon, localtime.tm_year, localtime.tm_hour, localtime.tm_min, localtime.tm_sec)
-        Client.screenshot("%s-%s" % (player and player.getName() or "default", ltformated))
+        player = g_game.getPlayer()
+        if player:
+            localtime = time.localtime(time.time())
+            ltformated = "%d%d%s%d%d%d" % (localtime.tm_mday, localtime.tm_mon, localtime.tm_year, localtime.tm_hour,   localtime.tm_min, localtime.tm_sec)
+            Client.screenshot("%s_%s" % (player.getName(), ltformated))
     
     def OnChatSend(self, event):
         content = self.chatContent.GetValue()
         if content:
+            if g_game.last_private_name:
+                if content[:2] == '/r':
+                    content = lstring.gsub(content, '/r', '*%s*' % g_game.last_private_name, 1)[0]
             Player.setChatContent(content)
-            Client.pressEnter()
+            Keyboard.sendEnter()
             self.chatContent.SetValue("")
-            Game.updateLastChatContent(content)
+            g_game.updateLastChatContent(content)
+            g_game.last_chat_index = -1
 
     def OnChatChar(self, event):
         keyCode = event.GetKeyCode()
         if keyCode == 315: # Button Up
-            Game.changeChatContentIndex(True)
+            g_game.changeChatContentIndex(1)
+            return
         elif keyCode == 317: # Button Down
-            Game.changeChatContentIndex(False)
+            g_game.changeChatContentIndex(-1)
+            return
         event.Skip()
 
     def OnAdminToggle(self, event):
-        MenuProperties.AdminMode = not MenuProperties.AdminMode
-        if MenuProperties.AdminMode:
-            self.SetSize(width=370, height=243)
+        Menus.AdminMode = not Menus.AdminMode
+        if Menus.AdminMode:
+            self.SetSize(width=370, height=239)
         else:
             self.SetSize(width=370, height=143)
 
     def OnShowHideHealing(self, event):
-        if MenuProperties.HealingFrame.IsShown():
-            MenuProperties.HealingFrame.Hide()
+        if Menus.Healing.IsShown():
+            Menus.Healing.Hide()
         else:
-            MenuProperties.HealingFrame.Show()
+            Menus.Healing.Show()
 
     def OnShowHideExtras(self, event):
-        if MenuProperties.ExtrasFrame.IsShown():
-            MenuProperties.ExtrasFrame.Hide()
+        if Menus.Extras.IsShown():
+            Menus.Extras.Hide()
         else:
-            MenuProperties.ExtrasFrame.Show()
+            Menus.Extras.Show()
 
     def OnShowHideCaveBot(self, event):
-        if MenuProperties.CaveBotFrame.IsShown():
-            MenuProperties.CaveBotFrame.Hide()
+        if Menus.CaveBot.IsShown():
+            Menus.CaveBot.Hide()
         else:
-            MenuProperties.CaveBotFrame.Show()
+            Menus.CaveBot.Show()
 
     def OnShowHideTargeting(self, event):
-        if MenuProperties.TargetingFrame.IsShown():
-            MenuProperties.TargetingFrame.Hide()
+        if Menus.Targeting.IsShown():
+            Menus.Targeting.Hide()
         else:
-            MenuProperties.TargetingFrame.Show()
+            Menus.Targeting.Show()
 
     def OnShowHideScripts(self, event):
-        if MenuProperties.ScriptsFrame.IsShown():
-            MenuProperties.ScriptsFrame.Hide()
+        if Menus.Scripts.IsShown():
+            Menus.Scripts.Hide()
         else:
-            MenuProperties.ScriptsFrame.Show()
+            Menus.Scripts.Show()
 
     def UpdatePlayerName(self, player):
         if player:
@@ -3417,7 +3269,7 @@ class GuiCaveBotMenu(wx.Frame):
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         wx.StaticBox(Panel, wx.ID_ANY, "Waypoints", (2, 0), (390, 270))
         wx.StaticBox(Panel, wx.ID_ANY, "CaveBot Hotkeys", (401, 0), (190, 50))
         # Looting
@@ -3436,9 +3288,8 @@ class GuiCaveBotMenu(wx.Frame):
         wx.StaticText(Panel, wx.ID_ANY, "Lotting Speed:", (407, 319), (60, 25))
         self.autolootSpeed = wx.ComboBox(Panel, wx.ID_ANY, "Normal", (467, 319), (90, 20), choices=["Fast", "Normal", "Slow", "Very-Slow"], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
         self.autolootSpeed.Bind(wx.EVT_COMBOBOX, self.OnAutoLootSpeed)
-        self.WaypointList = wx.ListBox(Panel, wx.ID_ANY, (12, 19), (180, 220), [], style=wx.LB_SINGLE|wx.LB_OWNERDRAW)
-        self.WaypointList.Bind(wx.EVT_LISTBOX_DCLICK, self.OnWaypointCursor)
-        #self.WaypointList.Bind(wx.EVT_MOTION, self.OnWaypointMotion)
+        self.waypoints = wx.ListBox(Panel, wx.ID_ANY, (12, 19), (180, 220), [], style=wx.LB_SINGLE|wx.LB_OWNERDRAW)
+        self.waypoints.Bind(wx.EVT_LISTBOX_DCLICK, self.OnWaypointCursor)
         ButtonDelete = wx.Button(Panel, wx.ID_ANY, "Del", (142, 244), (50, 20))
         ButtonDelete.SetToolTip(wx.ToolTip("Eliminar el punto de referencia seleccionado."))
         ButtonDelete.Bind(wx.EVT_BUTTON, self.OnDelete)
@@ -3455,7 +3306,7 @@ class GuiCaveBotMenu(wx.Frame):
         ButtonStand.Bind(wx.EVT_BUTTON, self.OnStand)
         ButtonNode = wx.Button(Panel, wx.ID_ANY, "Node", (252, 49), (40, 20))
         ButtonNode.SetToolTip(wx.ToolTip("Punto de referencia para establecer un nodo."))
-        ButtonNode.Bind(wx.EVT_BUTTON, self.OnNode)
+        #ButtonNode.Bind(wx.EVT_BUTTON, self.OnNode)
         ButtonWalk = wx.Button(Panel, wx.ID_ANY, "Walk", (292, 49), (40, 20))
         ButtonWalk.SetToolTip(wx.ToolTip("Punto de referencia para caminar."))
         ButtonAction = wx.Button(Panel, wx.ID_ANY, "Action", (332, 49), (40, 20))
@@ -3469,24 +3320,27 @@ class GuiCaveBotMenu(wx.Frame):
         ButtonShovel.SetToolTip(wx.ToolTip("Punto de referencia para usar una pala."))
         ButtonLure = wx.Button(Panel, wx.ID_ANY, "Lure", (332, 69), (40, 20))
         ButtonLure.SetToolTip(wx.ToolTip("Punto de referencia para lurear monstruos."))
-        self.buttonRecPath = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":movie_camera: Rec", use_aliases=True, variant="emoji_type"), (196, 99), (60, 20))
-        self.buttonRecPath.SetToolTip(wx.ToolTip("Iniciar grabacion de camino."))
-        self.buttonRecPath.Bind(wx.EVT_BUTTON, self.OnRec)
+        self.button_rec = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":movie_camera: Rec", use_aliases=True, variant="emoji_type"), (196, 99), (60, 20))
+        self.button_rec.SetToolTip(wx.ToolTip("Iniciar grabacion de camino."))
+        self.button_rec.Bind(wx.EVT_BUTTON, self.OnRec)
         ButtonBuyPots = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":baby_bottle: Pot", use_aliases=True, variant="emoji_type"), (196, 120), (60, 20))
         ButtonBuyPots.SetToolTip(wx.ToolTip("Punto de referencia para cargar potions."))
         ButtonBuyPots.Bind(wx.EVT_BUTTON, self.OnBuyPots)
-        self.buttonReversePath = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":repeat_one: Rev", use_aliases=True, variant="emoji_type"), (196, 140), (60, 20))
-        self.buttonReversePath.SetToolTip(wx.ToolTip("Agregar el camino en reversa."))
-        self.buttonReversePath.Bind(wx.EVT_BUTTON, self.OnReversePath)
+        self.button_reverse = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":repeat_one: Rev", use_aliases=True, variant="emoji_type"), (196, 140), (60, 20))
+        self.button_reverse.SetToolTip(wx.ToolTip("Agregar el camino en reversa."))
+        self.button_reverse.Bind(wx.EVT_BUTTON, self.OnReversePath)
         self.extraScript = wx.TextCtrl(Panel, wx.ID_ANY, "", (260, 99), (125, 140), style=wx.TE_MULTILINE|wx.TE_NO_VSCROLL)
-        self.buttonNextWays = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":curly_loop: Next", use_aliases=True, variant="emoji_type"), (196, 161), (60, 20))
+        self.buttonNextWays = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":curly_loop: Next", use_aliases=True, variant="emoji_type"), (196, 160), (60, 20))
         self.buttonNextWays.SetToolTip(wx.ToolTip("Siguiente lista de waypoints."))
         self.buttonNextWays.Bind(wx.EVT_BUTTON, self.OnNext)
+        self.button_relative = wx.Button(Panel, wx.ID_ANY, emoji.emojize(":cancer: Rela", use_aliases=True, variant="emoji_type"), (196, 180), (60, 20))
+        self.button_relative.SetToolTip(wx.ToolTip("Usar los puntos referencias relativos al vector Z"))
+        self.button_relative.Bind(wx.EVT_BUTTON, self.OnRela)
         CheckBoxLabel = wx.CheckBox(Panel, wx.ID_ANY, "labels", (202, 244), (80, 20))
         CheckBoxLabel.SetToolTip(wx.ToolTip("Seguir puntos de referencia que tengan comentarios."))
-        self.CheckBoxWaypoints = wx.CheckBox(Panel, wx.ID_ANY, emoji.emojize(":running:waypoints", use_aliases=True, variant="emoji_type"), (282, 244), (100, 20))
-        self.CheckBoxWaypoints.SetToolTip(wx.ToolTip("Seguir todos los puntos de referencia.\nLa distancia maxima de un punto a otro es de 30 SQM"))
-        self.CheckBoxWaypoints.Bind(wx.EVT_CHECKBOX, self.OnFollowWaypoints)
+        self.follow_waypoints = wx.CheckBox(Panel, wx.ID_ANY, emoji.emojize(":running:waypoints", use_aliases=True, variant="emoji_type"), (282, 244), (100, 20))
+        self.follow_waypoints.SetToolTip(wx.ToolTip("Seguir todos los puntos de referencia.\nLa distancia maxima de un punto a otro es de 30 SQM"))
+        self.follow_waypoints.Bind(wx.EVT_CHECKBOX, self.OnFollowWaypoints)
         # Save And Load Settings
         wx.StaticBox(Panel, wx.ID_ANY, "Saving & Loading settings", (2, 269), (200, 130))
         self.fileSelected = wx.ListBox(Panel, wx.ID_ANY, (12, 289), (180, 60), self.GetFiles(), wx.LB_SINGLE)
@@ -3503,10 +3357,10 @@ class GuiCaveBotMenu(wx.Frame):
         ButtonLoad = wx.Button(Panel, wx.ID_ANY, "Load", (132, 375), (60, 20))
         ButtonLoad.SetToolTip(wx.ToolTip("Cargar el archivo seleccionado."))
         ButtonLoad.Bind(wx.EVT_BUTTON, self.OnLoad)
-        MenuProperties.CaveBotMenu = self
+        Menus.CaveBotMenu = self
 
     def OnClose(self, event):
-        return MenuProperties.MainMenu.OnShowHideCaveBot(event)
+        return Menus.Main.OnShowHideCaveBot(event)
 
     def OnFileSelected(self, event):
         selection = self.fileSelected.GetSelection()
@@ -3544,160 +3398,131 @@ class GuiCaveBotMenu(wx.Frame):
         return EMPLACEMENT_OFFSETS[self.emplacement.GetValue()]
             
     def OnStand(self, event):
-        if not Game.RecWaypoints:
-            player = Game.getPlayerClient()
-            if player:
-                Waypoints.waypoints.append(Waypoint(player.getPosition()+self.GetEmplacementPos()))
-                self.OrderWaypoints()
-                self.CleanReverseBack()
-                self.WaypointList.EnsureVisible(len(Waypoints.waypoints) -1)
-        elif __DEBUG__:
-            print("[CaveBot/Waypoints]: no puedes establecer waypoint stand con la capturadora activada.")
+        player = g_game.getPlayer()
+        if player:
+            new_waypoint = Waypoint(player.getPosition()+self.GetEmplacementPos())
+            g_waypoints.append(new_waypoint)
+            if g_waypoints.record:
+                g_waypoints.lastRecord = new_waypoint
+            self.OrderWaypoints()
+            self.CleanReverseBack()
+            self.waypoints.EnsureVisible(g_waypoints.count() -1)
 
     def OnBuyPots(self, event):
-        if not Game.RecWaypoints:
-            player = Game.getPlayerClient()
-            if player:
-                selection = self.WaypointList.GetSelection()
-                if selection == wx.NOT_FOUND:
-                    waypoint = Waypoint(player.getPosition()+self.GetEmplacementPos(), type=WAYPOINT_TYPE_BUYPOT)
-                    Waypoints.waypoints.append(waypoint)
-                else:
-                    waypoint = Waypoints.waypoints[selection]
-                    waypoint.type = WAYPOINT_TYPE_BUYPOT
-                    waypoint.updateColour()
-                self.OrderWaypoints()
-                self.CleanReverseBack()
-        elif __DEBUG__:
-            print("[CaveBot/Waypoints]: no puedes establecer waypoint pots con la capturadora activada.")
-
-    def OnNode(self, event):
-        player = Game.getPlayerClient()
-        if not player or not self.WaypointList:
-            return
-        selection = self.WaypointList.GetSelection()
-        waypoint = selection == wx.NOT_FOUND and Waypoints.getCurrentWaypoint() or Waypoints.waypoints[selection]
-        if waypoint.isStand():
-            waypoint.setType(WAYPOINT_TYPE_NODE)
-            waypoint.updateColour()
-        waypoint.setNodePos(player.getPosition())
-        self.UpdateWaypoint(waypoint, selection)
-        self.CleanReverseBack()
+        player = g_game.getPlayer()
+        if player:
+            selection = self.waypoints.GetSelection()
+            if selection == wx.NOT_FOUND:
+                new_waypoint = Waypoint(player.getPosition()+self.GetEmplacementPos(), type=WAYPOINT_BUYPOT)
+                g_waypoints.append(new_waypoint)
+                if g_waypoints.record:
+                    g_waypoints.lastRecord = new_waypoint
+            else:
+                waypoint = g_waypoints.get(selection)
+                waypoint.type = WAYPOINT_BUYPOT
+                waypoint.updateColour()
+            self.OrderWaypoints()
+            self.CleanReverseBack()
 
     def OnAction(self, event):
-        selection = self.WaypointList.GetSelection()
-        if selection != wx.NOT_FOUND:
-            waypoint = Waypoints.getWaypoints()[selection]
-            strCode = self.extraScript.GetValue()
-            # GET POSITION #
-            it = luaString_gmatch(strCode, "%s?([xyzXYZ]?%d+)")
-            position = Position()
-            rit = it()
-            while rit:
-                if rit.isdigit():
-                    position.ups.append(int(rit))
-                elif rit[0].lower() == 'x':
-                    position.x = int(rit[1:])
-                elif rit[0].lower() == 'y':
-                    position.y = int(rit[1:])
-                elif rit[0].lower() == 'z':
-                    position.z = int(rit[1:])
-                rit = it()
-            position.update()
-            # END GET POSITION #
-            # GET REPEAT ACTION #
-            repeat = luaString_match(strCode, "repeat (%d+)") or 1
-            # END REPEAT ACTION #
-            waypoint.setAction(WaypointAction(WaypointAction.TYPE_USEITEMONXYZ, position, int(repeat)))
-            self.UpdateWaypoint(waypoint, selection)
+        player = g_game.getPlayer()
+        if player:
+            selection = self.waypoints.GetSelection()
+            if selection == wx.NOT_FOUND:
+                waypoint = Waypoint(player.getPosition()+self.GetEmplacementPos(), type=WAYPOINT_ACTION)
+                g_waypoints.append(waypoint)
+            else:
+                waypoint = g_waypoints.get(selection)
+                waypoint.type = WAYPOINT_ACTION
+                waypoint.updateColour()
+            self.OrderWaypoints()
+            self.CleanReverseBack()
+
+    def toggle_rec_waypoint(self, record):
+        g_waypoints.record = record
+        g_waypoints.lastRecord = None
+        self.button_rec.SetForegroundColour(record and wx.RED or wx.NullColour)
 
     def OnRec(self, event):
-        if not Game.getCheckWaypoints():
-            Game.RecWaypoints = not Game.RecWaypoints
-            Waypoints.lastPositionRec = None
-            event.GetEventObject().SetForegroundColour(Game.RecWaypoints and wx.RED or wx.NullColour)
-        elif __DEBUG__:
-            print("[CaveBot/Waypoints]: no puedes iniciar la captura con el check waypoints activado.")
+        if self.follow_waypoints.IsChecked():
+            self.follow_waypoints.SetValue(False)
+        self.toggle_rec_waypoint(not g_waypoints.record)
 
     def OnFollowWaypoints(self, event):
-        if Game.RecWaypoints:
-            event.GetEventObject().SetValue(False)
-            if __DEBUG__:
-                print("[CaveBot/Waypoints]: no puedes iniciar el follow waypoints con la capturadora activada.")
-            return
+        if g_waypoints.record and self.follow_waypoints.IsChecked():
+            self.toggle_rec_waypoint(False)
 
     def OrderWaypoints(self):
         posStrList = []
         wchecks = []
-        for index, w in enumerate(Waypoints.getWaypoints()):
-            beforeWaypoint = (index == 0 and Waypoints.waypoints[-1] or Waypoints.waypoints[index-1])
-            posStrList.append(w.getInfo(beforeWaypoint, Waypoints.currentWaypoint == index))
-            wchecks.append({'w': w, 's': index})
-        self.WaypointList.Set(posStrList)
+        for index, waypoint in enumerate(g_waypoints.waypoints):
+            b_waypoint = (index == 0 and g_waypoints.get(-1) or g_waypoints.get(index -1))
+            posStrList.append(waypoint.getInfo(b_waypoint, g_waypoints.current == index))
+            wchecks.append({'w': waypoint, 's': index})
+        self.waypoints.Set(posStrList)
         for info in wchecks:
             color = info['w'].getColour()
             if color:
-                self.WaypointList.SetItemBackgroundColour(info['s'], color)
+                self.waypoints.SetItemBackgroundColour(info['s'], color)
 
     def AddWaypointOrder(self, waypoint):
-        index = self.WaypointList.GetCount()
-        wlen = len(Waypoints.waypoints)
-        beforeWaypoint = (wlen > 0 and Waypoints.waypoints[-1] or None)
-        posStrList = [waypoint.getInfo(beforeWaypoint, index == 0)]
-        self.WaypointList.InsertItems(posStrList, index)
-        Waypoints.waypoints.append(waypoint)
-        if wlen+1 > 2:
-            self.UpdateWaypoint(Waypoints.waypoints[0], 0)
+        index = self.waypoints.GetCount()
+        wcount = g_waypoints.count()
+        b_waypoint = (wcount > 0 and g_waypoints.get(-1) or None)
+        posStrList = [waypoint.getInfo(b_waypoint, index == 0)]
+        self.waypoints.InsertItems(posStrList, index)
+        g_waypoints.append(waypoint)
+        if ((wcount +1) > 2):
+            self.UpdateWaypoint(g_waypoints.get(0), 0)
 
     def UpdateWaypoint(self, waypoint, selection):
-        beforeWaypoint = (selection == 0 and Waypoints.waypoints[-1] or Waypoints.waypoints[selection-1])
-        self.WaypointList.SetString(selection, waypoint.getInfo(beforeWaypoint, Waypoints.currentWaypoint == selection))
+        b_waypoint = (selection == 0 and g_waypoints.get(-1) or g_waypoints.get(selection -1))
+        self.waypoints.SetString(selection, waypoint.getInfo(b_waypoint, g_waypoints.current == selection))
         color = waypoint.getColour()
         if color:
-            self.WaypointList.SetItemBackgroundColour(selection, color)
+            self.waypoints.SetItemBackgroundColour(selection, color)
 
     def UpdateWaypointTwo(self, w1, s1, w2, s2):
         self.UpdateWaypoint(w1, s1)
         self.UpdateWaypoint(w2, s2)
-        self.WaypointList.EnsureVisible(s2)
+        self.waypoints.EnsureVisible(s2)
 
     def OnDelete(self, event):
-        index = self.WaypointList.GetSelection()
+        index = self.waypoints.GetSelection()
         if index != wx.NOT_FOUND:
-            Waypoints.waypoints.pop(index)
+            g_waypoints.waypoints.pop(index)
             self.OrderWaypoints()
             self.CleanReverseBack()
         elif Waypoints.waypoints:
-            Waypoints.waypoints.pop(-1)
+            g_waypoints.waypoints.pop(-1)
             self.OrderWaypoints()
             self.CleanReverseBack()
 
     def OnClear(self, event):
-        Waypoints.waypoints.clear()
-        self.WaypointList.Set([])
+        g_waypoints.clear()
+        self.waypoints.Set([])
         self.CleanReverseBack()
 
     def OnReversePath(self, event):
-        if not Game.RecWaypoints:
-            color = wx.NullColour
-            if len(Waypoints.waypoints) > 2:
-                if not Waypoints.reverseAdded:
-                    Waypoints.reverseAdded = Waypoints.waypoints[1:-1][::-1]
-                    Waypoints.waypoints += Waypoints.reverseAdded
-                    color = wx.Colour(52, 152, 219)
-                else:
-                    Waypoints.waypoints = Waypoints.waypoints[:-len(Waypoints.reverseAdded)]
-                    Waypoints.reverseAdded = []
-                self.OrderWaypoints()
+        if g_waypoints.record:
+            g_waypoints.record = False
+            self.button_rec.SetForegroundColour(wx.NullColour)
+        if g_waypoints.count() > 2:
+            if not g_waypoints.reverse_waypoints:
+                g_waypoints.reverse_waypoints = g_waypoints.waypoints[1:-1][::-1]
+                g_waypoints.waypoints += g_waypoints.reverse_waypoints
+                self.button_reverse.SetForegroundColour(wx.Colour(52, 152, 219))
             else:
-                Waypoints.reverseAdded = []
-            event.GetEventObject().SetForegroundColour(color)
-        elif __DEBUG__:
-            print("[CaveBot/Waypoints]: no puedes crear el camino de regreso con la capturadora activada.")
+                g_waypoints.waypoints = g_waypoints.waypoints[:-len(g_waypoints.reverse_waypoints)]
+                g_waypoints.reverse_waypoints.clear()
+            self.OrderWaypoints()
+        else:
+            g_waypoints.reverse_waypoints.clear()
+        self.button_reverse.SetForegroundColour(wx.NullColour)
 
     def CleanReverseBack(self):
-        self.buttonReversePath.SetForegroundColour(wx.NullColour)
-        Waypoints.reverseAdded = []
+        self.button_reverse.SetForegroundColour(wx.NullColour)
+        g_waypoints.reverse_waypoints.clear()
 
     def OnNext(self, event):
         filename = self.extraScript.GetValue()
@@ -3705,32 +3530,29 @@ class GuiCaveBotMenu(wx.Frame):
             if __DEBUG__:
                 print("[CaveBot]: el archivo 'data/cavebot/%s.txt' no existe." % filename)
             return
-        selection = self.WaypointList.GetSelection()
+        selection = self.waypoints.GetSelection()
         if selection == wx.NOT_FOUND:
             if __DEBUG__:
                 print("[CaveBot]: no has seleccionado ningun 'waypoint' de la lista.")
             return
-        waypoint = Waypoints.getWaypoints()[selection]
+        waypoint = g_waypoints.get(selection)
         waypoint.next_ways = self.extraScript.GetValue()
-        waypoint.type = WAYPOINT_TYPE_NEXT
+        waypoint.type = WAYPOINT_NEXT
         waypoint.updateColour()
         self.UpdateWaypoint(waypoint, selection)
 
-    def OnWaypointCursor(self, event):
-        beforeWaypoint = Waypoints.getCurrentWaypoint()
-        beforeIndex = Waypoints.currentWaypoint
-        Waypoints.currentWaypoint = event.GetSelection()
-        waypoint = Waypoints.getWaypoints()[Waypoints.currentWaypoint]
-        self.UpdateWaypoint(beforeWaypoint, beforeIndex)
-        self.UpdateWaypoint(waypoint, Waypoints.currentWaypoint)
+    def OnRela(self, event):
+        g_waypoints.relative = not g_waypoints.relative
+        self.button_relative.SetForegroundColour(g_waypoints.relative and wx.Colour(255, 0, 255) or wx.NullColour)
 
-    def OnWaypointMotion(self, event):
-        seeIndex = self.WaypointList.HitTest(event.GetPosition())
-        if seeIndex != wx.NOT_FOUND:
-            waypoint = Waypoints.waypoints[seeIndex]
-            nodePos = waypoint.getNodePos()
-            if nodePos:
-                self.WaypointList.SetToolTip(wx.ToolTip("<TEST>"))
+    def OnWaypointCursor(self, event):
+        b_waypoint = g_waypoints.get()
+        b_index = g_waypoints.current
+        selection = event.GetSelection()
+        g_waypoints.current = selection
+        waypoint = g_waypoints.get()
+        self.UpdateWaypoint(b_waypoint, b_index)
+        self.UpdateWaypoint(waypoint, selection)
 
     def OnTextLootItemId(self, event):
         value = self.LootItemId.GetValue()
@@ -3790,10 +3612,10 @@ class GuiTargetingMenu(wx.Frame):
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         wx.StaticBox(Panel, wx.ID_ANY, "Targeting", (2, 2), (572, 225))
-        wx.StaticBox(Panel, wx.ID_ANY, "Stance Options", (2, 229), (180, 180))
-        wx.StaticBox(Panel, wx.ID_ANY, "Monster filter", (402, 229), (170, 180))
+        wx.StaticBox(Panel, wx.ID_ANY, "Stance Options", (2, 229), (180, 177))
+        wx.StaticBox(Panel, wx.ID_ANY, "Monster filter", (402, 229), (170, 177))
         self.monsterList = wx.ListBox(Panel, wx.ID_ANY, (182, 20), (210, 180), [], wx.LB_SINGLE)
         self.monsterList.Bind(wx.EVT_LISTBOX, self.OnChangeSelectionMlist)
         wx.StaticText(Panel, wx.ID_ANY, "Creature Name", (12, 20), (120, 12))
@@ -3801,11 +3623,11 @@ class GuiTargetingMenu(wx.Frame):
         self.MonsterName.SetToolTip(wx.ToolTip("Nombre del monstruo\nEjemplo: Rotworm"))
         wx.StaticText(Panel, wx.ID_ANY, "Single", (12, 60), (60, 12))
         self.MonsterSingleSpell =  wx.TextCtrl(Panel, wx.ID_ANY, "F3", (12, 74), (70, 20), style=wx.TE_CENTRE)
-        self.MonsterSingleSpell.Bind(wx.EVT_TEXT, self.OnChangeSingleSpell)
+        self.MonsterSingleSpell.Bind(wx.EVT_TEXT, self.OnChangeSpellValue)
         self.MonsterSingleSpell.SetToolTip(wx.ToolTip("Single Spell Hotkey!"))
         wx.StaticText(Panel, wx.ID_ANY, "Expansive", (102, 60), (60, 12))
         self.MonsterPluralSpell =  wx.TextCtrl(Panel, wx.ID_ANY, "F4", (102, 74), (70, 20), style=wx.TE_CENTRE)
-        self.MonsterPluralSpell.Bind(wx.EVT_TEXT, self.OnChangePluralSpell)
+        self.MonsterPluralSpell.Bind(wx.EVT_TEXT, self.OnChangeSpellValue)
         self.MonsterPluralSpell.SetToolTip(wx.ToolTip("Expansive Spell Hotkey!"))
         AddMonster = wx.Button(Panel, wx.ID_ANY, "Add", (272, 203), (60, 20))
         AddMonster.Bind(wx.EVT_BUTTON, self.OnAddMonster)
@@ -3814,12 +3636,21 @@ class GuiTargetingMenu(wx.Frame):
         DelMonster.Bind(wx.EVT_BUTTON, self.OnDeleteMonster)
         DelMonster.SetToolTip(wx.ToolTip("Eliminar el monstruo seleccionado."))
         wx.StaticText(Panel, wx.ID_ANY, "Action", (12, 100), (60, 12))
-        self.monsterAction = wx.ComboBox(Panel, wx.ID_ANY, 'No Action', (12, 114), (160, 21), choices=['No Action', 'Attack', 'Follow'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
+        self.monsterAction = wx.ComboBox(Panel, wx.ID_ANY, 'No Action', (12, 114), (160, 21), choices=['No Action', 'Attack', 'Follow', 'Attack/Follow'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
+        wx.StaticText(Panel, wx.ID_ANY, "Spe Single", (12, 144), (60, 12))
+        self.SpecialSingleSpell =  wx.TextCtrl(Panel, wx.ID_ANY, "F11", (12, 160), (70, 20), style=wx.TE_CENTRE)
+        self.SpecialSingleSpell.Bind(wx.EVT_TEXT, self.OnChangeSpellValue)
+        wx.StaticText(Panel, wx.ID_ANY, "Spe Expans", (102, 144), (60, 12))
+        self.SpecialPluralSpell =  wx.TextCtrl(Panel, wx.ID_ANY, "F12", (102, 160), (70, 20), style=wx.TE_CENTRE)
+        self.SpecialPluralSpell.Bind(wx.EVT_TEXT, self.OnChangeSpellValue)
+        self.SpecialSpellMode = wx.CheckBox(Panel, wx.ID_ANY, emoji.emojize("Synchronized :gun:", use_aliases=True, variant="emoji_type"), (42, 180), (140, 20))
         wx.StaticText(Panel, wx.ID_ANY, "Count", (402, 94), (80, 15))
         self.monsterCount = wx.ComboBox(Panel, wx.ID_ANY, 'Any', (402, 109), (160, 21), choices=['Any', '1', '1+', '2', '2+', '3', '3+', '4', '4+', '5', '5+', '6', '6+', '7', '7+'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
+        wx.StaticText(Panel, wx.ID_ANY, "Priority", (402, 134), (80, 15))
+        self.box_priority = wx.ComboBox(Panel, wx.ID_ANY, '1', (402, 149), (160, 21), choices=['1', '2', '3', '4', '5', '6', '7', '8', '9'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
         wx.StaticText(Panel, wx.ID_ANY, "Range distance:", (12, 255), (90, 20))
-        rangeSelected = wx.ComboBox(Panel, wx.ID_ANY, '2', (122, 249), (50, 21), choices=['2', '3', '4', '5', '6', '7'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
-        wx.StaticBox(Panel, wx.ID_ANY, "Saving && Loading settings", (192, 229), (200, 180))
+        self.range_distance = wx.ComboBox(Panel, wx.ID_ANY, '1', (122, 249), (50, 21), choices=['1', '2', '3', '4', '5', '6', '7'], style=wx.CB_SIMPLE|wx.CB_READONLY&~wx.CB_DROPDOWN)
+        wx.StaticBox(Panel, wx.ID_ANY, "Saving && Loading settings", (192, 229), (200, 177))
         self.CheckBoxRunTarget = wx.CheckBox(Panel, wx.ID_ANY, "Run Targeting", (12, 379), (140, 20))
         self.fileSelected = wx.ListBox(Panel, wx.ID_ANY, (202, 249), (180, 100), self.GetFiles(), wx.LB_SINGLE)
         self.fileSelected.Bind(wx.EVT_LISTBOX, self.OnFileSelected)
@@ -3832,16 +3663,13 @@ class GuiTargetingMenu(wx.Frame):
         ButtonLoad = wx.Button(Panel, wx.ID_ANY, "Load", (322, 379), (60, 20))
         ButtonLoad.Bind(wx.EVT_BUTTON, self.OnLoad)
 
-    def OnChangeSingleSpell(self, event):
-        self.MonsterSingleSpell.ChangeValue(self.MonsterSingleSpell.GetValue().upper())
-        self.MonsterSingleSpell.SetInsertionPointEnd()
-    
-    def OnChangePluralSpell(self, event):
-        self.MonsterPluralSpell.ChangeValue(self.MonsterPluralSpell.GetValue().upper())
-        self.MonsterPluralSpell.SetInsertionPointEnd()
+    def OnChangeSpellValue(self, event):
+        object = event.GetEventObject()
+        object.ChangeValue(object.GetValue().upper())
+        object.SetInsertionPointEnd()
 
     def OnClose(self, event):
-        return MenuProperties.MainMenu.OnShowHideTargeting(event)
+        return Menus.Main.OnShowHideTargeting(event)
 
     def OnFileSelected(self, event):
         selection = self.fileSelected.GetSelection()
@@ -3891,40 +3719,41 @@ class GuiTargetingMenu(wx.Frame):
                 files.append(result[0])
         return files
 
+    def UpdateTargetMonsters(self):
+        self.monsterList.Set([str(m_type) for m_type in g_targeting.get()])
+
     def OnAddMonster(self, event):
         name = self.MonsterName.GetValue()
         if name:
-            targetMonster = TargetMonster(name)
-            targetMonster.setSingleSpell('{%s}' % self.MonsterSingleSpell.GetValue())
-            targetMonster.setPluralSpell('{%s}' % self.MonsterPluralSpell.GetValue())
-            targetMonster.setCount(self.monsterCount.GetString(self.monsterCount.GetSelection()))
-            targetMonster.setAction(self.monsterAction.GetString(self.monsterAction.GetSelection()))
-            Targeting.addMonster(targetMonster)
-            tmStrList = []
-            for tm in Targeting.monsterList:
-                tmStrList.append(str(tm))
-            self.monsterList.Set(tmStrList)
+            m_type_new = TargetMonster(name)
+            m_type_new.singleSpell = '{%s}' % self.MonsterSingleSpell.GetValue()
+            m_type_new.pluralSpell = '{%s}' % self.MonsterPluralSpell.GetValue()
+            m_type_new.specialSingleSpell = '{%s}' % self.SpecialSingleSpell.GetValue()
+            m_type_new.specialPluralSpell = '{%s}' % self.SpecialPluralSpell.GetValue()
+            m_type_new.count = self.monsterCount.GetString(self.monsterCount.GetSelection())
+            m_type_new.priority = int(self.box_priority.GetString(self.box_priority.GetSelection()))
+            m_type_new.action = self.monsterAction.GetString(self.monsterAction.GetSelection())
+            g_targeting.add(m_type_new)
+            self.UpdateTargetMonsters()
 
     def OnDeleteMonster(self, event):
         index = self.monsterList.GetSelection()
         if index != wx.NOT_FOUND:
-            Targeting.removeMonsterByIndex(index)
-            tmStrList = []
-            for tm in Targeting.monsterList:
-                tmStrList.append(str(tm))
-            self.monsterList.Set(tmStrList)
+            g_targeting.removeByIndex(index)
+            self.UpdateTargetMonsters()
 
     def OnChangeSelectionMlist(self, event):
         index = event.GetEventObject().GetSelection()
         if index != wx.NOT_FOUND:
-            targetMonster = Targeting.getMonsterByIndex(index)
-            self.MonsterName.ChangeValue(targetMonster.getName())
-            match = re.compile(r'(\w\d+)').search(targetMonster.getSingleSpell())
-            self.MonsterSingleSpell.ChangeValue(match and match.group() or '')
-            match = re.compile(r'(\w\d+)').search(targetMonster.getPluralSpell())
-            self.MonsterPluralSpell.ChangeValue(match and match.group() or '')
-            self.monsterCount.SetStringSelection(targetMonster.getCount())
-            self.monsterAction.SetStringSelection(targetMonster.getAction())
+            m_type = g_targeting.get(index)
+            self.MonsterName.ChangeValue(m_type.name)
+            self.MonsterSingleSpell.ChangeValue(lstring.match(m_type.singleSpell, "%{(.-)%}"))
+            self.MonsterPluralSpell.ChangeValue(lstring.match(m_type.pluralSpell, "%{(.-)%}"))
+            self.SpecialSingleSpell.ChangeValue(lstring.match(m_type.specialSingleSpell, "%{(.-)%}"))
+            self.SpecialPluralSpell.ChangeValue(lstring.match(m_type.specialPluralSpell, "%{(.-)%}"))
+            self.monsterCount.SetStringSelection(m_type.count)
+            self.box_priority.SetStringSelection(str(m_type.priority))
+            self.monsterAction.SetStringSelection(m_type.action)
 
 #_ooooo___________________oo_____________oo___________
 #oo___oo__ooooo__oo_ooo__________ooooo___oo_____oooo__
@@ -3941,7 +3770,7 @@ class GuiScriptsMenu(wx.Frame):
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         self.scriptList = wx.ListCtrl(Panel, wx.ID_ANY, pos=(8, 5), size=(240, 145), style=wx.LC_SINGLE_SEL|wx.LC_REPORT|wx.LC_NO_HEADER)
         self.scriptList.InsertColumn(0, 'Name', width=120)
         self.scriptList.InsertColumn(1, 'Interval', width=70)
@@ -3988,12 +3817,12 @@ class GuiScriptsMenu(wx.Frame):
     def AddItemToScriptList(self, index, script):
         self.scriptList.InsertItem(self.CreateItem(index, 0, script.getName()))
         self.scriptList.SetItem(self.CreateItem(index, 1, '%sms' % int(script.getInterval() / 1000 / 1000)))
-        self.scriptList.SetItem(self.CreateItem(index, 2, (script.getRunning() and MenuProperties.ScriptRunningText or MenuProperties.ScriptPauseText)))
-        color = MenuProperties.ScriptOffColour
+        self.scriptList.SetItem(self.CreateItem(index, 2, (script.getRunning() and Menus.ScriptRunningText or Menus.ScriptPauseText)))
+        color = Menus.ScriptOffColour
         if script.getRunning():
-            color = MenuProperties.ScriptOnColour
+            color = Menus.ScriptOnColour
         if script.isLocked():
-            color = MenuProperties.ScriptLockedColour
+            color = Menus.ScriptLockedColour
         self.scriptList.SetItemTextColour(index, color)
         self.scriptList.SetItemData(index, index)
 
@@ -4028,7 +3857,6 @@ class GuiScriptsMenu(wx.Frame):
             self.reloadButton.Enable()
         if script.isLocked():
             self.checkScriptRun.Disable()
-            self.currentScript = None
             return False
         self.checkScriptRun.Enable()
 
@@ -4039,8 +3867,8 @@ class GuiScriptsMenu(wx.Frame):
             return False
         status = event.GetEventObject().GetValue() == 1 and True or False
         self.currentScript.setRunning(status)
-        self.scriptList.SetItem(self.CreateItem(self.currentSelectScriptIndex, 2, (status and MenuProperties.ScriptRunningText or MenuProperties.ScriptPauseText)))
-        self.scriptList.SetItemTextColour(self.currentSelectScriptIndex, (status and MenuProperties.ScriptOnColour or MenuProperties.ScriptOffColour))
+        self.scriptList.SetItem(self.CreateItem(self.currentSelectScriptIndex, 2, (status and Menus.ScriptRunningText or Menus.ScriptPauseText)))
+        self.scriptList.SetItemTextColour(self.currentSelectScriptIndex, (status and Menus.ScriptOnColour or Menus.ScriptOffColour))
 
 #ooooooo_________oo___________________________
 #oo______o____o__oo____oo_ooo___ooooo___oooo__
@@ -4053,12 +3881,12 @@ class GuiScriptsMenu(wx.Frame):
 class GuiExtrasMenu(wx.Frame):
     def __init__(self, parent):
         toolWindow = wx.SYSTEM_MENU | wx.CAPTION | wx.CLOSE_BOX | wx.STAY_ON_TOP | wx.CLIP_CHILDREN
-        wx.Frame.__init__(self, parent, id=wx.ID_ANY, title=u"%s BOT - Extras" % GAME_TITLE, size=(400, 200), style=toolWindow)
+        wx.Frame.__init__(self, parent, id=wx.ID_ANY, title=u"%s BOT - Extras" % GAME_TITLE, size=(400, 220), style=toolWindow)
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
-        wx.StaticBox(Panel, wx.ID_ANY, "Extras:", (5, 1), (373, 155))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
+        wx.StaticBox(Panel, wx.ID_ANY, "Extras:", (5, 1), (373, 175))
         self.squareToLowHp = wx.CheckBox(Panel, wx.ID_ANY, "Square player lowhp on screen", (20, 15), (300, 25))
         self.showNotifications = wx.CheckBox(Panel, wx.ID_ANY, "Show notification from events", (20, 35), (300, 25))
         self.warningPlayerScreen = wx.CheckBox(Panel, wx.ID_ANY, "Warning/Capture player on screen", (20, 55), (300, 25))
@@ -4067,9 +3895,10 @@ class GuiExtrasMenu(wx.Frame):
         self.showFps = wx.CheckBox(Panel, wx.ID_ANY, "Always show LAG and FPS of client", (20, 95), (300, 25))
         #self.showFps.Bind(wx.EVT_CHECKBOX, self.OnShopFps)
         self.teleportToTemple = wx.CheckBox(Panel, wx.ID_ANY, "Teleport to the temple if they watch you a lot.", (20, 115), (300, 25))
+        self.speakMessages = wx.CheckBox(Panel, wx.ID_ANY, "Listen to all messages with the system voice.", (20, 135), (300, 25))
 
     def OnClose(self, event):
-        return MenuProperties.MainMenu.OnShowHideExtras(event)
+        return Menus.Main.OnShowHideExtras(event)
 
     def OnAutoloadSettings(self, event):
         DataBot.setAutoloadSettings(event.GetEventObject().IsChecked())
@@ -4089,7 +3918,7 @@ class GuiHealingMenu(wx.Frame):
         self.SetIcon(parent.icon)
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         Panel = wx.Panel(self, wx.ID_ANY)
-        Panel.SetFont(wx.Font(MenuProperties.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, MenuProperties.Font))
+        Panel.SetFont(wx.Font(Menus.FontSize, wx.DEFAULT, wx.NORMAL, wx.NORMAL, 0, Menus.Font))
         wx.StaticBox(Panel, wx.ID_ANY, "Healing:", (5, 1), (180, 205))
         wx.StaticText(Panel, wx.ID_ANY, "Heal Spell %", (10, 15), (80, 12))
         self.healSpellHotkey = wx.TextCtrl(Panel, wx.ID_ANY, "", (10, 30), (40, 20), style=wx.TE_CENTRE)
@@ -4101,8 +3930,9 @@ class GuiHealingMenu(wx.Frame):
         self.GM_PotionHotkey = wx.TextCtrl(Panel, wx.ID_ANY, "", (10, 100), (40, 20), style=wx.TE_CENTRE)
         self.GM_PotionValue = wx.Slider(Panel, wx.ID_ANY, 50, 0, 100, (50, 85), (100, 25), style=wx.SL_VALUE_LABEL)
         wx.StaticText(Panel, wx.ID_ANY, "Vocation ID", (10, 120), (80, 12))
-        self.VocationHotkey = wx.TextCtrl(Panel, wx.ID_ANY, "", (10, 135), (40, 20), style=wx.TE_CENTRE)
+        self.VocationHotkey = wx.TextCtrl(Panel, wx.ID_ANY, "None", (10, 135), (40, 20), style=wx.TE_CENTRE)
         self.VocationID = wx.Slider(Panel, wx.ID_ANY, 1, 1, 5, (50, 120), (100, 25), style=wx.SL_VALUE_LABEL)
+        self.VocationID.Bind(wx.EVT_SCROLL_CHANGED, self.OnChangeVocation)
         # Miscellaneous
         wx.StaticBox(Panel, wx.ID_ANY, "Miscellaneous:", (190, 1), (180, 205))
         wx.StaticText(Panel, wx.ID_ANY, "Haste Spell %", (200, 15), (80, 12))
@@ -4117,41 +3947,38 @@ class GuiHealingMenu(wx.Frame):
         self.UpdateHotkeys()
 
     def OnClose(self, event):
-        return MenuProperties.MainMenu.OnShowHideHealing(event)
+        return Menus.Main.OnShowHideHealing(event)
+
+    def OnChangeVocation(self, event):
+        self.VocationHotkey.ChangeValue(VOCATION_NAMES[event.GetEventObject().GetValue()])
 
     def UpdateHotkeys(self):
         heal_spell = SpellHotkey.getByName("HealSpell")
-        match = re.compile(r'(\w\d+)').search(heal_spell.getButton())
-        self.healSpellHotkey.ChangeValue(match and match.group() or '')
+        self.healSpellHotkey.ChangeValue(lstring.match(heal_spell.getButton(), "%{(.-)%}"))
         self.healSpellValue.SetValue(heal_spell.getHppc())
 
         ghp_hotkey = SpellHotkey.getByName("GreatHealthPotion")
-        match = re.compile(r'(\w\d+)').search(ghp_hotkey.getButton())
-        self.GH_PotionHotkey.ChangeValue(match and match.group() or '')
+        self.GH_PotionHotkey.ChangeValue(lstring.match(ghp_hotkey.getButton(), "%{(.-)%}"))
         self.GH_PotionValue.SetValue(ghp_hotkey.getHppc())
 
         gmp_hotkey = SpellHotkey.getByName("GreatManaPotion")
-        match = re.compile(r'(\w\d+)').search(gmp_hotkey.getButton())
-        self.GM_PotionHotkey.ChangeValue(match and match.group() or '')
+        self.GM_PotionHotkey.ChangeValue(lstring.match(gmp_hotkey.getButton(), "%{(.-)%}"))
         self.GM_PotionValue.SetValue(gmp_hotkey.getMppc())
 
         vocation_id = SpellHotkey.getByName("VocationID")
-        self.VocationHotkey.ChangeValue(vocation_id.getButton())
+        self.VocationHotkey.ChangeValue(VOCATION_NAMES[vocation_id.getHppc()])
         self.VocationID.SetValue(vocation_id.getHppc())
 
         haste_spell = SpellHotkey.getByName("Haste")
-        match = re.compile(r'(\w\d+)').search(haste_spell.getButton())
-        self.hasteSpellHotkey.ChangeValue(match and match.group() or '')
+        self.hasteSpellHotkey.ChangeValue(lstring.match(haste_spell.getButton(), "%{(.-)%}"))
         self.hasteSpellValue.SetValue(haste_spell.getMppc())
 
         manashield_spell = SpellHotkey.getByName("Manashield")
-        match = re.compile(r'(\w\d+)').search(manashield_spell.getButton())
-        self.manashieldHotkey.ChangeValue(match and match.group() or '')
+        self.manashieldHotkey.ChangeValue(lstring.match(manashield_spell.getButton(), "%{(.-)%}"))
         self.manashieldValue.SetValue(manashield_spell.getHppc())
 
         buff_spell = SpellHotkey.getByName("BuffSpell")
-        match = re.compile(r'(\w\d+)').search(buff_spell.getButton())
-        self.buffSpellHotkey.ChangeValue(match and match.group() or '')
+        self.buffSpellHotkey.ChangeValue(lstring.match(buff_spell.getButton(), "%{(.-)%}"))
         self.buffSpellValue.SetValue(buff_spell.getMppc())
 
 #ooooooooooo                                   o8               
@@ -4200,6 +4027,135 @@ class Events:
         else:
             Player.levelPercent = 0
 
+#oooo   oooo                      oooo                                                   oooo 
+# 888  o88  ooooooooo8 oooo   oooo 888ooooo     ooooooo     ooooooo   oo oooooo     ooooo888  
+# 888888   888oooooo8   888   888  888    888 888     888   ooooo888   888    888 888    888  
+# 888  88o 888           888 888   888    888 888     888 888    888   888        888    888  
+#o888o o888o 88oooo888     8888   o888ooo88     88ooo88    88ooo88 8o o888o         88ooo888o 
+#                       o8o888                                                                
+
+class KeyboardCallback:
+
+    callbacks = Queue()
+
+    def __init__(self, keyCodes=[], callback=None, *args):
+        self.keyCodes = keyCodes
+        self.callback = callback
+        self.args = args
+        self.pressed = False
+        self.released = True
+        self.last_state = False
+
+def KeyboardLinester(q):
+    while True:
+        kc = q.get()
+        if kc:
+            if kc.pressed:
+                foundKeys = True
+                for keyCode in kc.keyCodes:
+                    if not win32api.GetAsyncKeyState(keyCode):
+                        foundKeys = False
+                        break
+                if foundKeys:
+                    kc.callback()
+            elif kc.released:
+                if win32api.GetAsyncKeyState(kc.keyCodes[0]):
+                    if win32api.GetAsyncKeyState(kc.keyCodes[1]):
+                        kc.last_state = True
+                    elif kc.last_state:
+                        kc.callback(*kc.args)
+                        kc.last_state = False
+            q.task_done()
+            q.put(kc)
+        time.sleep(THREAD_KEYBOARD_MIN_TICKS)
+
+class Keyboard:
+
+    thread = threading.Thread(target=KeyboardLinester, args=(KeyboardCallback.callbacks,))
+    keys = {'back':8,'tab':9,'enter':13,'shift':16,'ctrl':17,'alt':18,'esc':27,'space':32,'0':48,'1':49,'2':50,'3':51,'4':52,'5':53,'6':54,'7':55,'8':56,'9':57,'numpad0': 96,'numpad1': 97,'numpad2': 98,'numpad3': 99,'numpad4': 100,'numpad5': 101,'numpad6': 102,'numpad7': 103,'numpad8': 104,'numpad9': 105,'f1': 112,'f2': 113,'f3': 114,'f4': 115,'f5': 116,'f6': 117,'f7': 118,'f8': 119,'f9': 120,'f10': 121,'f11': 122,'f12': 123}
+
+    def addKey(keyCode):
+        KeyboardCallback.callbacks.put(keyCode)
+
+    def Beep():
+        win32api.Beep(4200, 50)
+
+    def sendKeys(keyStr):
+        Send_Keystrokes(keyStr)
+
+    def sendEnter():
+        user32.PostMessageW(Client_Handle, 256, 13, 0)
+        user32.PostMessageW(Client_Handle, 256, 13, 0)
+
+    def leftClick(x, y):
+        try:
+            lParam = ((y << 16) | x)
+            user32.PostMessageW(Client_Handle, 513, 0, lParam)
+            user32.PostMessageW(Client_Handle, 514, 0, lParam)
+        except:
+            print("<Keyboard.leftClick> Unexpected error:", sys.exc_info()[0])
+
+    def rightClick(x, y):
+        try:
+            lParam = ((y << 16) | x)
+            user32.PostMessageW(Client_Handle, 516, 0, lParam)
+            user32.PostMessageW(Client_Handle, 517, 0, lParam)
+        except:
+            print("<Keyboard.rightClick> Unexpected error:", sys.exc_info()[0])
+
+    def fastClickLoot(x, y):
+        try:
+            lParam = (y << 16) | x
+            user32.PostMessageW(Client_Handle, 256, 17, 0)
+            user32.PostMessageW(Client_Handle, 513, 0, lParam)
+            user32.PostMessageW(Client_Handle, 514, 0, lParam)
+            user32.PostMessageW(Client_Handle, 257, 17, 0)
+        except:
+            print("<Keyboard.fastClickLoot> Unexpected error:", sys.exc_info()[0])
+
+#ooooooooo   o88                                      o8            oooo                               
+# 888    88o oooo   oooooooo8 ooooooooo     ooooooo o888oo ooooooo   888ooooo   ooooooooo8 oo oooooo   
+# 888    888  888  888ooooooo  888    888   ooooo888 888 888     888 888   888 888oooooo8   888    888 
+# 888    888  888          888 888    888 888    888 888 888         888   888 888          888        
+#o888ooo88   o888o 88oooooo88  888ooo88    88ooo88 8o 888o 88ooo888 o888o o888o  88oooo888 o888o       
+#                             o888                                                                     
+
+def DispatcherLinester(q, repeat):
+    while True:
+        task = q.get()
+        if task:
+            now_ns = time.time_ns()
+            if task.cdelay <= now_ns:
+                task.cdelay = now_ns + task.delay
+                if repeat:
+                    if PROCESS:
+                        task.task(g_game.getPlayer())
+                else:
+                    task.task(*task.args)
+            q.task_done()
+            if repeat:
+                q.put(task)
+        time.sleep(THREAD_MIN_TICKS)
+
+class DispatcherTask:
+
+    def __init__(self, delay, task, *args):
+        self.delay = sec_to_ns(delay)
+        self.task = task
+        self.args = args
+        self.cdelay = 0
+
+class Dispatcher:
+
+    def __init__(self, repeat=False):
+        self.callbacks = Queue()
+        self.thread = threading.Thread(target=DispatcherLinester, args=(self.callbacks, repeat,))
+        self.thread.start()
+
+    def addTask(self, delay=0, task=None, *args):
+        self.callbacks.put(DispatcherTask(delay, task, *args))
+g_dispatcher = Dispatcher()
+
 #     o                            o88   o888  o88                          
 #    888   oooo  oooo  oooo   oooo oooo   888  oooo   ooooooo   oo oooooo   
 #   8  88   888   888    888o888    888   888   888   ooooo888   888    888 
@@ -4213,6 +4169,9 @@ def isInArray(array, item):
                 continue
             return True
     return False
+
+def getWordsDuration(words):
+    return max(len(words) * STATIC_DURATION_PER_CHARACTER, MIN_STATIC_TEXT_DURATION)
 
 def index_in_list(a_list, index):
     return index < len(a_list)
@@ -4243,30 +4202,29 @@ def onLevelChange(player, value, percent):
             minutesLeft = math.floor((hoursLeft - math.floor(hoursLeft))*60)
             secondsLeft = math.floor((((hoursLeft - math.floor(hoursLeft)) * 60) - minutesLeft)*60)
             hoursLeft = math.floor(hoursLeft)
-            wx.CallAfter(MenuProperties.MainMenu.UpdateTimeLeft, (hoursLeft, minutesLeft, secondsLeft))
-            wx.CallAfter(MenuProperties.MainMenu.UpdateExpPerHour, expPerHour)
+            wx.CallAfter(Menus.Main.UpdateTimeLeft, (hoursLeft, minutesLeft, secondsLeft))
+            wx.CallAfter(Menus.Main.UpdateExpPerHour, expPerHour)
 
 def getTimeFormated():
     localtime = time.localtime(time.time())
     return "%d:%d:%d" % (localtime.tm_hour, localtime.tm_min, localtime.tm_sec)
 
+def String_To_Hash(string):
+    return binascii.crc32(string.encode())
+
 LOGCONSOLE_MAXLINES = 1000
 LOGCONSOLE_LASTINSERT = False
 def printConsole(*args):
-    if not MenuProperties.MainMenu:
+    if not Menus.Main:
         return
     global LOGCONSOLE_LASTINSERT
     for text in args:
-        wx.CallAfter(MenuProperties.MainMenu.logConsole.write, '%s%s >> %s' % ((LOGCONSOLE_LASTINSERT and '\n' or ''), getTimeFormated(), str(text)))
+        wx.CallAfter(Menus.Main.logConsole.write, '%s%s >> %s' % ((LOGCONSOLE_LASTINSERT and '\n' or ''), getTimeFormated(), str(text)))
         LOGCONSOLE_LASTINSERT = True
 
-DefaultPrintFunc = print
-def print(*args, **kwargs):
-    DefaultPrintFunc(*args)
-    return printConsole(*args)
-
-def error(message):
-    Game.addTelemetryMessage(TelemetryMessage(message))
+Default_Print = print
+def print(*args):
+    return Default_Print(*args), printConsole(*args)
 
 def sec_to_ns(sec):
     return sec * 1000000000
@@ -4284,4 +4242,4 @@ g_k6.start()
 g_sett = CreateThread()
 g_sett.running = True
 g_sett.start()
-print("[Threads]: se han creado 4 hilos para el manejo de los scripts.")
+print("[Threads]: se han creado 6 hilos para el manejo de los scripts.")

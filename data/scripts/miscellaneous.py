@@ -9,7 +9,7 @@ from todo import *
 #_________________________________________________oooo____________________________________________ooooo__
 
 def scriptLevelUpNotification(player, interval):
-    if player and Game.isShowNotifications():
+    if player and g_game.isShowNotifications():
         currentlevel = player.getLevel()
         afterLevel = player.getStorageValue("afterLevel")
         if afterLevel and afterLevel < currentlevel:
@@ -28,31 +28,38 @@ def scriptLevelUpNotification(player, interval):
 #_____________________________________________________ooooo__________________________ooooo__________________
 
 def scriptWarningPlayerOnScreen(player, interval):
-    if player and Game.isWarningPlayerOnScreen() and not player.isInPz():
-        players = Game.getPlayers(True)
+    if player and g_game.isWarningPlayerOnScreen() and not player.isInPz():
+        players = g_game.getPlayers(True)
         if len(players) >= 2:
-            found_no_friends = []
-            for p in players:
-                if p != player and not p.isFriend():
-                    found_no_friends.append(p.getName())
+            draw_square_players = tuple(p for p in players if p != player and p.isEnemy())
+            found_no_friends = tuple(p.getName() for p in draw_square_players)
             if found_no_friends:
-                warning_message = "Advertencia: hay %d jugador%s a la vista: %s%s"
-                player_names = ""
-                for index, name in enumerate(found_no_friends):
-                    player_names += name
-                    if index >= 2:
-                        break
-                    else:
-                        player_names += ', '
-                players_in_sight = len(found_no_friends)
-                Client.speak(warning_message % (players_in_sight, (players_in_sight > 1 and 'es' or ''), player_names, (players_in_sight > 3 and ' y otros.' or '.')))
+                found_hash = 'warning_players_%s' % String_To_Hash(str(found_no_friends))
+                exhausted = player.getStorageValue(found_hash)
+                if not exhausted or exhausted <= time.time():
+                    player.setStorageValue(found_hash, time.time() + len(found_no_friends))
+                    tuple(map(lambda p: p.setSquare(wx.YELLOW, True), draw_square_players))
+                    time.sleep(THREAD_MIN_TICKS)
+                    Client.screenshot(found_hash)
+                    time.sleep(THREAD_MIN_TICKS)
+                    tuple(map(lambda p: p.setSquare(None, False), draw_square_players))
+                    warning_message = "Advertencia: hay %d jugador%s a la vista: %s%s"
+                    player_names = ""
+                    for index, name in enumerate(found_no_friends):
+                        player_names += name
+                        if index >= 2:
+                            break
+                        else:
+                            player_names += ', '
+                    players_in_sight = len(found_no_friends)
+                    Client.speak(warning_message % (players_in_sight, (players_in_sight > 1 and 'es' or ''), player_names, (players_in_sight > 3 and ' y otros.' or '.')))
 
 def scriptCancelCaveBotAndTeleportTemple(player, interval):
-    if player and Game.isTeleportToTemple() and not player.isInPz():
+    if player and g_game.isTeleportToTemple() and not player.isInPz():
         if not player.isInFight():
             if player.getStorageValue("teleporToTemple"):
                 player.say("!tp temple")
-                defaultMsg = Player.getDefaultMessage()
+                defaultMsg = player.getDefaultMessage()
                 foundCancel = [x for x in ('Tu', 'puedes') if x in defaultMsg]
                 if foundCancel:
                     player.setStorageValue("teleporToTemple", None)
@@ -60,10 +67,11 @@ def scriptCancelCaveBotAndTeleportTemple(player, interval):
                     Client.speak("Tu no puedes usar el hechizo de teleportacion!")
                     return
             elif player.getStorageValue("logout"):
+                print("Intentando logout")
                 player.setStorageValue("logout", None)
                 # logout
                 return
-        enemies = Game.getEnemies()
+        enemies = g_game.getEnemies()
         watching_me = player.getStorageValue("watchingme") or 0
         if enemies:
             for enemy in enemies:
@@ -83,9 +91,10 @@ def scriptCancelCaveBotAndTeleportTemple(player, interval):
             player.setStorageValue("watchingmelast", watching_me)
             Client.speak("Advertencia: creo que te estan observando.")
             player.setStorageValue("teleporToTemple", True)
+            g_game.stop_walking = True
 
 def scriptShowFps(player, interval):
-    if MenuProperties.ExtrasFrame.showFps.IsChecked():
+    if Menus.Extras.showFps.IsChecked():
         if not Client.getShowFps():
             Client.setShowFps(True)
     elif Client.getShowFps():
@@ -97,11 +106,16 @@ def scriptOneshootWarning(player, interval):
             dmgs = player.getDmgs(True)
             if dmgs >= 30:
                 Client.speak("Peligro: te estan bajando de %d%% la mana!" % dmgs)
+            elif player.getMppc() <= 30:
+                Client.Window.set_focus()
+                Client.speak("Alerta: te estas muriendo.")
         else:
             dmgs = player.getDmgs(False)
             if dmgs >= 40:
                 Client.speak("Peligro: te estan bajando de %d%% la salud!" % dmgs)
-
+            elif player.getHppc() <= 25:
+                Client.Window.set_focus()
+                Client.speak("Alerta: te estas muriendo.")
 
 script = Script("Miscellaneous", 1000, locked=True)
 script.onThink = scriptWarningPlayerOnScreen
@@ -109,7 +123,7 @@ script.onThink = scriptLevelUpNotification
 script.onThink = scriptCancelCaveBotAndTeleportTemple
 script.onThink = scriptShowFps
 script.onThink = scriptOneshootWarning
-script.register()
+script.register(__name__)
 
 #oo_______oo__________oo_______oo____oo____oo_________________oo_____
 #oo____________oooo___oo_ooo___oo____oo____oo__ooooo___ooooo__oo___o_
@@ -120,20 +134,21 @@ script.register()
 #______________ooooo_________________________________________________
 
 def scriptLightHack():
-    player = Game.getPlayerClient()
-    if not player:
-        return
-    lightHackState = player.getStorageValue("lightHack")
-    if not lightHackState:
-        player.setStorageValue("lightHack", True)
-        player.setStorageValue("lightHackInfo", player.getLight())
-        player.setLight(100, 20)
-        return
-    player.setStorageValue("lightHack", False)
-    lightInfo = player.getStorageValue("lightHackInfo")
-    player.setLight(lightInfo['colour'], lightInfo['amount'])
+    player = g_game.getPlayer()
+    if player:
+        lightHackState = player.getStorageValue("lightHack")
+        if not lightHackState:
+            player.setStorageValue("lightHack", True)
+            player.setStorageValue("lightHackInfo", player.getLight())
+            player.setLight(100, 20)
+            player.setDefaultMessage("LightHack activado!")
+            return
+        player.setStorageValue("lightHack", False)
+        lightInfo = player.getStorageValue("lightHackInfo")
+        player.setLight(lightInfo['colour'], lightInfo['amount'])
+        player.setDefaultMessage("LightHack desactivado!")
 
-keyboard.add_hotkey('ctrl+f11', scriptLightHack)
+Keyboard.addKey(KeyboardCallback([17,122], scriptLightHack))
 
 #_ooooo__oo_________________________ooooooo__________________
 #oo___oo_oo_ooo___ooooo__oo_______o_oo_________ooooo___oooo__
@@ -143,7 +158,7 @@ keyboard.add_hotkey('ctrl+f11', scriptLightHack)
 #_ooooo__oo____o__ooooo____oo__oo___oo______o_ooooo____oooo__
 #___________________________________________oooo_____________
 
-keyboard.add_hotkey('alt+f8', lambda: wx.CallAfter(MenuProperties.ExtrasFrame.showFps.SetValue, not MenuProperties.ExtrasFrame.showFps.IsChecked()))
+Keyboard.addKey(KeyboardCallback([18,119], lambda: wx.CallAfter(Menus.Extras.showFps.SetValue, not Menus.Extras.showFps.IsChecked())))
 
 #_ooooo__oo_________________________ooo_____ooo_________________________
 #oo___oo_oo_ooo___ooooo__oo_______o_oooo___oooo__ooooo__oo_ooo__oo____o_
@@ -153,4 +168,4 @@ keyboard.add_hotkey('alt+f8', lambda: wx.CallAfter(MenuProperties.ExtrasFrame.sh
 #_ooooo__oo____o__ooooo____oo__oo___oo_______oo__ooooo__oo____o_oo_ooo__
 #_______________________________________________________________________
 
-keyboard.add_hotkey('ctrl+f12', lambda: wx.CallAfter(MenuProperties.MainMenu.OnToggle))
+Keyboard.addKey(KeyboardCallback([17,123], wx.CallAfter, Menus.Main.OnToggle))

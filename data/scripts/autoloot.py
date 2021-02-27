@@ -8,63 +8,80 @@ from todo import *
 #___oooo____ooooo__oo______o_ooooo____oooo___ooooo__
 #__________________________oooo_____________________
 
+def wait_for_open_corpse(position):
+    tries = 3
+    while not g_game.isExistContainerOpened():
+        Send_RightClick(position.x, position.y)
+        time.sleep(1)
+        tries -= 1
+        if not tries:
+            return False
+    return True
+
+def wait_for_looted(player):
+    start = time.time_ns()
+    while g_game.isExistContainerOpened() and player.lootItems():
+        if (time.time_ns() - start) > GAME_AUTOLOOT_WAITING:
+            return False
+    return True
+
+def wait_for_close_containers():
+    start = time.time_ns()
+    while g_game.isExistContainerOpened():
+        g_game.closeContainer()
+        time.sleep(0.001)
+        if (time.time_ns() - start) > GAME_AUTOLOOT_WAITING:
+            return False
+    return True
+
 def scriptCacheLastCreatures(player, interval):
-    cacheLastCreatures = Game.getCacheLastCreatures()
-    if cacheLastCreatures:
-        for monster in cacheLastCreatures:
-            if monster.getHppc() <= 0:
-                Game.addCacheCorpses(Corpse(monster))
+    if g_game.getAutoLootStatus():
+        remove_targets = []
+        for index, target in enumerate(g_game.cache_targets):
+            if target.getHppc() <= 0:
+                remove_targets.append(index)
+                can_add_corpse = True
+                for corpse in g_game.cache_corpses:
+                    if corpse.getPosition() == target.getPosition():
+                        can_add_corpse = False
+                        break
+                if can_add_corpse:
+                    g_game.cache_corpses.append(Corpse(target))
+        for index in sorted(remove_targets, key=lambda n: -n):
+            del g_game.cache_targets[index]
 
 def scriptCacheCorpses(player, interval):
-    if not MenuProperties.CaveBotMenu.autolootStatus.IsChecked():
-        return
-    if Game.LastCorpse:
-        if Game.LastCorpse.isExpire():
-            Game.LastCorpse = None
-        elif not Game.IsAttacking:
-            if player.getCapacity() <= 50000:
-                if Game.LastCorpse:
-                    Game.LastCorpse.setLooted()
-                Game.LastCorpse = None
-                Game.IsLooting = False
-                MenuProperties.CaveBotMenu.autolootStatus.SetValue(False)
-                Client.speak("Tienes muy poca capacidad, el sistema de auto saqueo se ha desabilitado.")
-                return
-            playerPos = Player.Position()
-            corpsePos = Game.LastCorpse.getPosition()
-            corpseDistance = playerPos.getDistance(corpsePos)
-            if corpseDistance <= 6:
-                start = time.time_ns()
-                while Game.isExistContainerOpened():
-                    Game.closeContainer()
-                    if (time.time_ns() - start) > GAME_AUTOLOOT_WAITING:
-                        break
-                toPos = corpsePos.getPositionOnWindow()
-                Client.rightClick(toPos.x, toPos.y)
-                time.sleep(1)
-                start = time.time_ns()
-                while Player.lootItems():
-                    if (time.time_ns() - start) > GAME_AUTOLOOT_WAITING:
-                        break
-                start = time.time_ns()
-                while Game.isExistContainerOpened():
-                    Game.closeContainer()
-                    if (time.time_ns() - start) > GAME_AUTOLOOT_WAITING:
-                        break
-                if Game.LastCorpse:
-                    Game.LastCorpse.setLooted()
-            Game.LastCorpse = None
-            return
-    cacheCorpses = Game.getCacheCorpses()
-    if cacheCorpses:
-        for corpse in cacheCorpses:
-            if corpse.isValid():
-                Game.LastCorpse = corpse
-                Game.IsLooting = True
-                return
-    Game.IsLooting = False
+    if g_game.getAutoLootStatus():
+        current_corpse = None
+        remove_corpses = []
+        for index, corpse in enumerate(g_game.cache_corpses):
+            if not corpse.isValid():
+                remove_corpses.append(index)
+            elif not corpse.isWait():
+                current_corpse = corpse
+                g_game.looting = True
+                break
+        if remove_corpses:
+            for index in sorted(remove_corpses, key=lambda n: -n):
+                del g_game.cache_corpses[index]
+        free_capacity = player.getCapacity()
+        if current_corpse and free_capacity > 50000:
+            corpse_pos = current_corpse.getPosition()
+            corpse_dist = Player.Position().getDistance(corpse_pos)
+            if corpse_dist <= 5:
+                if wait_for_close_containers():
+                    if wait_for_open_corpse(corpse_pos.getPositionOnWindow()):
+                        wait_for_looted(player)
+                    wait_for_close_containers()
+                    current_corpse.setLooted()
+            else:
+                current_corpse.wait()
+        elif not current_corpse:
+            g_game.looting = False
+            if free_capacity <= 50000:
+                Menus.CaveBot.autolootStatus.SetValue(False)
 
 script = Script("AutoLoot", 200, locked=True)
 script.onThink = scriptCacheCorpses
 script.onThink = scriptCacheLastCreatures
-script.register()
+script.register(__name__)
