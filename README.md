@@ -1,7 +1,7 @@
 # NecroPyBot
 
 ## Pasos para ejecutarlo:
-* Instalar Python 3.8.2 version de 32 Bits
+* Instalar Python 3.8.2 version de 32 Bits [Video tutorial para instalar python](https://youtu.be/W4jlkZiuMWc)
 * Ejecutar el archivo `install.bat` ( este a su ves ejecuta los comandos para instalar automaticamente todos los modulos necesarios )
 * Si no obtienes ningun error hasta ahora, entonces ya puedes ejecutar el archivo `necropybot.py` para abrir el bot
 * Nota: Debes de tener el necroxia cliente abierto con tu personaje conectado antes de abrir el bot
