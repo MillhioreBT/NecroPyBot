@@ -440,7 +440,7 @@ PROCESS_ASSIST_NAME = "Origin.exe"
 PROCESS_ASSIST = None
 CLIENT_ASSIST_HANDLE = None
 
-__DEBUG__ = True
+__DEBUG__ = False
 
 #oooo     oooo            o88               
 # 8888o   888   ooooooo   oooo  oo oooooo   
