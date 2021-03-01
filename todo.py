@@ -434,12 +434,6 @@ PROCESS = None
 PROCESS_BASEADDRESS = None
 BOT_PID = 0
 
-# Propiedades para crear un "campo gravitacional" y controlar personajes de un cliente a otro
-GAME_ASSIST_TITLE = "Tibia - "
-PROCESS_ASSIST_NAME = "Origin.exe"
-PROCESS_ASSIST = None
-CLIENT_ASSIST_HANDLE = None
-
 __DEBUG__ = False
 
 #oooo     oooo            o88               
@@ -452,26 +446,24 @@ class Main:
     
     def run():
         Client.updateApp()
-        #Client.updateAssistApp()
         DataBot.LoadHotkeyPresets()
         if DataBot.updateAutoloadSettings():
             player = g_game.getPlayer()
             if player:
                 DataBot.LoadHealingMiscellaneousToFile(player.getName())
                 wx.CallAfter(Menus.Extras.autoloadSettings.SetValue, True)
+                message = TextMessage(1)
+                message.setIndex(1)
+                message.setVisible(True)
+                message.setTime(5000)
+                message.setType(MESSAGE_INFO_DESCR)
+                message.setPosition(Position(0, 0))
+                message.setLines(1)
+                message.content = ['NecroPyBoT:','Welcomen to the version: 4.0']
+                TextMessage.setMessageByIndex(message)
         wx.CallAfter(Menus.Main.UpdateTimeLeft, (0, 0, 0))
         wx.CallAfter(Menus.Main.UpdateExpPerHour, 0)
         Script.loadscripts()
-        # Welcomen message XD
-        message = TextMessage(1)
-        message.setIndex(1)
-        message.setVisible(True)
-        message.setTime(5000)
-        message.setType(MESSAGE_INFO_DESCR)
-        message.setPosition(Position(0, 0))
-        message.setLines(1)
-        message.content = ['NecroPyBOT:','Welcomen to the version: 4.0']
-        TextMessage.setMessageByIndex(message)
 
 #  oooooooo8 o888  o88                          o8   
 #o888     88  888  oooo  ooooooooo8 oo oooooo o888oo 
@@ -492,8 +484,6 @@ class Client:
     
     App = 0
     Window = 0
-    AssistApp = 0
-    AssistWindow = 0
     screenshot_delay = 0
 
     def updateApp():
@@ -512,16 +502,6 @@ class Client:
             else:
                 print("The client handler could not be found.")
                 exit()
-
-    def updateAssistApp():
-        if (Client.AssistApp == 0):
-            Client.AssistApp = Application().connect(process=PROCESS_ASSIST.pid)
-            Client.AssistWindow = Client.AssistApp.window(title=GAME_ASSIST_TITLE)
-            if Client.AssistWindow:
-                global CLIENT_ASSIST_HANDLE
-                CLIENT_ASSIST_HANDLE = Client.AssistWindow.handle
-                if __DEBUG__:
-                    print("[Client]: se ha actualizado el cliente de asistencia.")
 
     def sendHotkey(player, value):
         hotkey = None
@@ -549,14 +529,6 @@ class Client:
             image = Capture_Image((-16, -39))
             if image:
                 return image.save("screenshots/%s.png" % name)
-
-    def fastClickLoot_Assist(x, y):
-        #try:
-        lParam = (y << 16) | x
-        user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0201, 0x0, lParam)
-        user32.PostMessageW(CLIENT_ASSIST_HANDLE, 0x0202, 0x0, lParam)
-        #except:
-        #    print("<Client.fastClickLoot_Assist> Unexpected error:", sys.exc_info()[0])
 
     def setShowFps(mode: bool = True):
         Memory.setNumber(ADDRESS_GAMECLIENT_SHOWFPS, mode and 65536 or 0)
@@ -605,8 +577,8 @@ class Creature:
     def getPosition(self):
         return Position(Memory.getNumber(self.offset + ADDRESS_BATTLELIST_POSX), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_POSY), Memory.getNumber(self.offset + ADDRESS_BATTLELIST_POSZ))
 
-    def getPositionOnWindow(self, assist: bool = False):
-        return self.getPosition().getPositionOnWindow(assist)
+    def getPositionOnWindow(self):
+        return self.getPosition().getPositionOnWindow()
 
     def getPositionOnBattle(self):
         pass
@@ -1430,8 +1402,8 @@ class Thing:
             self.position = Position()
         return self.position
 
-    def getPositionOnWindow(self, assist: bool = False):
-        return self.getPosition().getPositionOnWindow(assist)
+    def getPositionOnWindow(self):
+        return self.getPosition().getPositionOnWindow()
 
     def getIndex(self):
         return self.index
@@ -1604,7 +1576,6 @@ class Memory:
 
     def loadGameClient():
         global PROCESS
-        global PROCESS_ASSIST
         PROCESS = ReadWriteMemory.get_process_by_name_list(PROCESS_NAME)
         if not PROCESS:
             exit()
@@ -1613,13 +1584,6 @@ class Memory:
             PROCESS.get_all_access_handle()
             PROCESS.set_keep_process(True)
             loadProcess()
-            PROCESS_ASSIST = ReadWriteMemory.get_process_by_name_list(PROCESS_ASSIST_NAME)
-            if PROCESS_ASSIST:
-                PROCESS_ASSIST = PROCESS_ASSIST[0]
-                PROCESS_ASSIST.get_all_access_handle()
-                PROCESS_ASSIST.set_keep_process(True)
-                if __DEBUG__:
-                    print("[Memory]: se ha actualizado el proceso de asistencia correctamente.")
             return True
         else:
             Menus.Choose = GuiChooseMenu(Menus.Main)
@@ -2143,7 +2107,7 @@ class Position:
         return max(max(abs(self.getDistanceX(other)), abs(self.getDistanceY(other))), abs(self.getDistanceZ(other)))
 
     # Obtener la posicion de pantalla segun la posicion dada
-    def getPositionOnWindow(self, assist: bool = False):
+    def getPositionOnWindow(self):
         playerPos = Player.Position()
         diffx = self.getOffsetX(playerPos)
         diffy = self.getOffsetY(playerPos)
@@ -2663,23 +2627,24 @@ class Game:
         if player_id == Player.CachePlayerID:
             if Player.CachePlayer.getName() == Player.CachePlayerName:
                 return Player.CachePlayer
-        elif player_id == 0:
+        elif Player.CachePlayerID != -1 and player_id == 0:
             Memory.loadGameClient()
             Client.updateApp()
-            #Client.updateAssistApp()
-            print("Re-estableciendo la conexion con el cliente...")
+            if __DEBUG__:
+                print("Re-estableciendo la conexion con el cliente...")
             return
-        for index in range(ADDRESS_BATTLELIST_MAXINDEX):
-            player = Player(index)
-            if player.getId() == player_id:
-                player_name = player.getName()
-                Menus.Main.SetTitle(u"%s BOT - %s" % (GAME_TITLE, player_name))
-                Menus.Main.UpdatePlayerName(player)
-                Player.CachePlayer = player
-                Player.CachePlayerID = player_id
-                Player.CachePlayerName = player_name
-                Player.lastExp = player.getExperience()
-                return player
+        elif player_id != 0:
+            for index in range(ADDRESS_BATTLELIST_MAXINDEX):
+                player = Player(index)
+                if player.getId() == player_id:
+                    player_name = player.getName()
+                    Menus.Main.SetTitle(u"%s BOT - %s" % (GAME_TITLE, player_name))
+                    Menus.Main.UpdatePlayerName(player)
+                    Player.CachePlayer = player
+                    Player.CachePlayerID = player_id
+                    Player.CachePlayerName = player_name
+                    Player.lastExp = player.getExperience()
+                    return player
 
     def getPlayerByName(self, playerName=""):
         player_id = Memory.getNumber(ADDRESS_PLAYERID)
@@ -2849,10 +2814,8 @@ class Game:
 
     def shutdown(self):
         if OS_WINDOWS:
-            #os.kill(BOT_PID, signal.CTRL_BREAK_EVENT)
             os.kill(BOT_PID, signal.CTRL_C_EVENT)
         else:
-            #os.kill(BOT_PID, signal.SIGINT)
             os.kill(BOT_PID, signal.SIGBREAK)
 
     def updateLastChatContent(self, new_msg=""):
