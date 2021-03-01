@@ -429,6 +429,8 @@ PROCESS_NAME = "Necroxia Origin.exe"
 PROCESS = None
 PROCESS_BASEADDRESS = None
 BOT_PID = 0
+BOT_VERSION = 4
+BOT_THREADS = 0
 
 __DEBUG__ = False
 
@@ -448,7 +450,7 @@ class Main:
             if player:
                 playerName = player.getName()
                 if fromChoice:
-                    Windows_Speak.speak("Anclando al personaje %s" % playerName)
+                    g_dispatcher.addTask(0, Windows_Speak.speak, "Anclando al personaje %s" % playerName)
                 DataBot.LoadHealingMiscellaneousToFile(playerName)
                 wx.CallAfter(Menus.Extras.autoloadSettings.SetValue, True)
                 message = TextMessage(1)
@@ -458,12 +460,12 @@ class Main:
                 message.setType(MESSAGE_INFO_DESCR)
                 message.setPosition(Position(382, 225))
                 message.setLines(1)
-                message.content = ['NecroPyBoT:','Welcomen to the version: 4.0']
+                message.content = ['NecroPyBoT:','Welcomen to the version: %d.0' % BOT_VERSION]
                 TextMessage.setMessageByIndex(message)
         wx.CallAfter(Menus.Main.UpdateTimeLeft, (0, 0, 0))
         wx.CallAfter(Menus.Main.UpdateExpPerHour, 0)
         Script.loadscripts()
-        print("[Threads]: se han creado 6 hilos para el manejo de los scripts.")
+        print("[Threads]: se han creado %d hilos para el manejo de los scripts." % BOT_THREADS)
 
 #  oooooooo8 o888  o88                          o8   
 #o888     88  888  oooo  ooooooooo8 oo oooooo o888oo 
@@ -2975,6 +2977,8 @@ class CreateThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self, target=queueCheckEnclosures, args=(self, Scripts.enclosure_queue,))
         self.running = False
+        global BOT_THREADS
+        BOT_THREADS += 1
 
 class Menus:
     Font = "Operator Mono Light"
@@ -3020,6 +3024,7 @@ class GuiChooseMenu(wx.Frame):
         g_game.shutdown()
 
     def OnSelectClient(self, event):
+        self.Hide()
         global PROCESS
         index = event.GetEventObject().GetSelection()
         for i, p in enumerate(PROCESS):
@@ -3029,7 +3034,6 @@ class GuiChooseMenu(wx.Frame):
         PROCESS.set_keep_process(True)
         loadProcess()
         Main.run(True)
-        self.Hide()
         Menus.Main.Show()
         del self
 
@@ -4123,6 +4127,8 @@ class Dispatcher:
         self.callbacks = Queue()
         self.thread = threading.Thread(target=DispatcherLinester, args=(self.callbacks, repeat,))
         self.thread.start()
+        global BOT_THREADS
+        BOT_THREADS += 1
 
     def addTask(self, delay=0, task=None, *args):
         self.callbacks.put(DispatcherTask(delay, task, *args))

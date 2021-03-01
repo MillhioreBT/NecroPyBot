@@ -18,7 +18,7 @@ def get_ping():
         ping_response = subprocess.Popen("ping -w 500 -n 1 www.necroxia.com", stdout=subprocess.PIPE).stdout.read()
         return int(lstring.match(ping_response, "Media = (%d+)ms"))
     except:
-        return 9999
+        return 0
 
 Signal.startHandler()
 Keyboard.thread.start()
@@ -34,13 +34,13 @@ else:
     exit()
 
 BOT_PID = os.getpid()
-print("Welcomen to NecroPyBot 4.0!")
-g_licence = Dispatcher(True)
+print("Welcomen to NecroPyBot %d.0!" % BOT_VERSION)
 
 APP = wx.App(False)
 Menu = GuiMainMenu()
 if Memory.loadGameClient():
     Main.run()
+    g_licence = Dispatcher(True)
     g_licence.addTask(6, licence_check)
 else:
     Menu.Hide()
