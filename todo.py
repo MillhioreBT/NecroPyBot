@@ -440,13 +440,16 @@ __DEBUG__ = False
 
 class Main:
     
-    def run():
+    def run(fromChoice=False):
         Client.updateApp()
         DataBot.LoadHotkeyPresets()
         if DataBot.updateAutoloadSettings():
             player = g_game.getPlayer()
             if player:
-                DataBot.LoadHealingMiscellaneousToFile(player.getName())
+                playerName = player.getName()
+                if fromChoice:
+                    Windows_Speak.speak("Anclando al personaje %s" % playerName)
+                DataBot.LoadHealingMiscellaneousToFile(playerName)
                 wx.CallAfter(Menus.Extras.autoloadSettings.SetValue, True)
                 message = TextMessage(1)
                 message.setIndex(1)
@@ -3025,11 +3028,10 @@ class GuiChooseMenu(wx.Frame):
         PROCESS = PROCESS[index]
         PROCESS.set_keep_process(True)
         loadProcess()
-        Player.CachePlayerID = -1
-        Player.CachePlayer = None
-        Main.run()
+        Main.run(True)
         self.Hide()
         Menus.Main.Show()
+        del self
 
 #ooo_____ooo_________________________
 #oooo___oooo__ooooo__oo_ooo__oo____o_
