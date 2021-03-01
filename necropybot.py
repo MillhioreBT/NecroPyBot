@@ -34,15 +34,7 @@ else:
     exit()
 
 BOT_PID = os.getpid()
-
-try:
-    with open('key.pem', 'r') as pem:
-        print("key.pem found!")
-except OSError:
-    Window_Speak.speak("No se pudo abrir el archivo key pem!")
-    print("key.pem not found!")
-    g_game.shutdown()
-
+print("Welcomen to NecroPyBot 4.0!")
 g_licence = Dispatcher(True)
 
 APP = wx.App(False)
