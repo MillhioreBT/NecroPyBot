@@ -1664,7 +1664,7 @@ class Player(Creature):
 
     # Cache para el ultimo ClientPlayer encontrado
     CachePlayer = None
-    CachePlayerID = 0
+    CachePlayerID = -1
     CachePlayerName = ""
 
     """ Estas dos variables son esteticas, esto significa que solo las uso para darle detalles extras y posiblemente innesesarios"""
@@ -3055,7 +3055,7 @@ class GuiChooseMenu(wx.Frame):
         PROCESS = PROCESS[index]
         PROCESS.set_keep_process(True)
         loadProcess()
-        Player.CachePlayerID = 0
+        Player.CachePlayerID = -1
         Player.CachePlayer = None
         Main.run()
         self.Hide()
