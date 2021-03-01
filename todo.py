@@ -1605,6 +1605,7 @@ class Memory:
                 pStr.append('%d) [Origin]: %s' % (index, player_name))
             PROCESS = copyList
             Menus.Choose.clientList.Set(pStr)
+            g_dispatcher.addTask(0, Windows_Speak.speak, "Se encontraron %d clientes, elige a cual te quieres anclar." % len(copyList))
             return False
 
     def getNumber(address, offsets=(), sepOffset=0) -> int:
@@ -3013,7 +3014,7 @@ class GuiChooseMenu(wx.Frame):
         self.Show()
 
     def OnClose(self, event):
-        exit()
+        g_game.shutdown()
 
     def OnSelectClient(self, event):
         global PROCESS
