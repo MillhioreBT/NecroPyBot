@@ -1,5 +1,7 @@
 # NecroPyBot
 
+![image](https://user-images.githubusercontent.com/28090948/109466095-8ce0c080-7a3f-11eb-8937-22731f47c2d3.png)
+
 ## Pasos para ejecutarlo
 * Instalar Python 3.8.2 version de 32 Bits [Video tutorial para instalar python](https://youtu.be/W4jlkZiuMWc)
 * Ejecutar el archivo `install.bat` ( este a su ves ejecuta los comandos para instalar automaticamente todos los modulos necesarios )
@@ -24,5 +26,5 @@
 
 ## Creditos especiales
 * Sarah Wesker!
-* @vsantiago113 por el grandioso modulo `ReadWriteMemory` que tomado prestado.
+* @vsantiago113 por el grandioso modulo `ReadWriteMemory` que he tomado prestado.
 * en general gracias a Python ;D
