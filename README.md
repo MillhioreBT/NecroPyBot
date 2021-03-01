@@ -9,7 +9,7 @@
 * Nota: Debes de tener el necroxia cliente abierto con tu personaje conectado antes de abrir el bot
 
 ## Scripting
-* Luego agregare descripcion para crear scripts personalizados
+* Puedes entrar a la wiki y aprender a crear scripts para NecroPyBot, [Click aqui](https://github.com/MillhioreBT/NecroPyBot/wiki/Scripting#bienvenido-al-apartado-de-scripting)
 
 ## Advertencias
 * El bot esta totalmente prohibido asi que descargo toda responsabilidad si usted es baneado, use esto bajo su propio consentimiento.
