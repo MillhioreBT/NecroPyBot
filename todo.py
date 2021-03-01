@@ -374,8 +374,10 @@ WINDOW_SCREEN_OPTIONS = {
     }
 }
 
+Windows_Speak = Dispatch('SAPI.Spvoice')
 if not (WINDOWSCREENKEY in WINDOW_CENTER_POSITION):
     print("Your screen size does not exist in the database.")
+    Windows_Speak.speak("Tu resolución de pantalla no es compatible.")
     exit()
 
 SCREENSIZE = WINDOW_CENTER_POSITION[WINDOWSCREENKEY]
@@ -421,12 +423,6 @@ MESSAGE_ORANGEMESSAGE = 16
 MESSAGE_WHITEMESSAGESTATIC = 19
 MESSAGE_GREENMESSAGE = 22
 MESSAGE_BLUEMESSAGE = 24
-MESSAGE_TYPENAMES = {
-    MESSAGE_SAY: ' says',
-    MESSAGE_WHISPER: ' whispers',
-    MESSAGE_YELL: ' yells',
-    MESSAGE_PRIVATEMESSAGE: ''
-}
 
 GAME_TITLE = "Origin Server"
 PROCESS_NAME = "Necroxia Origin.exe"
@@ -457,13 +453,14 @@ class Main:
                 message.setVisible(True)
                 message.setTime(5000)
                 message.setType(MESSAGE_INFO_DESCR)
-                message.setPosition(Position(0, 0))
+                message.setPosition(Position(382, 225))
                 message.setLines(1)
                 message.content = ['NecroPyBoT:','Welcomen to the version: 4.0']
                 TextMessage.setMessageByIndex(message)
         wx.CallAfter(Menus.Main.UpdateTimeLeft, (0, 0, 0))
         wx.CallAfter(Menus.Main.UpdateExpPerHour, 0)
         Script.loadscripts()
+        print("[Threads]: se han creado 6 hilos para el manejo de los scripts.")
 
 #  oooooooo8 o888  o88                          o8   
 #o888     88  888  oooo  ooooooooo8 oo oooooo o888oo 
@@ -484,10 +481,9 @@ class Client:
     
     App = 0
     Window = 0
-    screenshot_delay = 0
 
     def updateApp():
-        if (Client.App == 0):
+        if Client.App == 0:
             Client.App = Application().connect(process=PROCESS.pid)
             Client.Window = Client.App.window(title=GAME_TITLE)
             if Client.Window:
@@ -500,6 +496,7 @@ class Client:
                 Capture_Image = Client.Window.capture
                 Client_Handle = Client.Window.handle
             else:
+                Windows_Speak.speak("No se pudo encontrar el tibia cliente.")
                 print("The client handler could not be found.")
                 exit()
 
@@ -521,7 +518,6 @@ class Client:
 
     def speak(text=""):
         if text:
-            Windows_Speak = Dispatch('SAPI.Spvoice')
             return Windows_Speak.Speak(text)
 
     def screenshot(name):
@@ -1559,8 +1555,11 @@ def loadProcess():
         hModuleSnap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, PROCESS.pid)
         ret = Module32First(hModuleSnap, pointer(me32))
         if ret == 0:
-            print('ListProcessModules() Error on Module32First[%d]' % GetLastError())
+            lastError = GetLastError()
+            print('ListProcessModules() Error on Module32First[%d]' % lastError)
             CloseHandle(hModuleSnap)
+            Windows_Speak.speak("Error en el modulo %d de la lista." % lastError)
+            g_game.shutdown()
         while ret:
             found = str(me32.szModule).find(PROCESS_NAME)
             if found != -1:
@@ -1568,9 +1567,14 @@ def loadProcess():
                 PROCESS_BASEADDRESS = me32.modBaseAddr
             ret = Module32Next(hModuleSnap , pointer(me32))
         CloseHandle(hModuleSnap)
+        if PROCESS_BASEADDRESS is None:
+            Windows_Speak.speak("Error en la direccion base del proceso, no se pudo cargar.")
+            g_game.shutdown()
         return PROCESS_BASEADDRESS
     except:
         print("Error in ListProcessModules")
+        Windows_Speak.speak("Error en la lista de procesos de modulos.")
+        g_game.shutdown()
 
 class Memory:
 
@@ -1578,7 +1582,8 @@ class Memory:
         global PROCESS
         PROCESS = ReadWriteMemory.get_process_by_name_list(PROCESS_NAME)
         if not PROCESS:
-            exit()
+            Windows_Speak.speak("No se pudo encontrar el cliente.")
+            return g_game.shutdown()
         elif len(PROCESS) == 1:
             PROCESS = PROCESS[0]
             PROCESS.get_all_access_handle()
@@ -1593,8 +1598,8 @@ class Memory:
                 PROCESS = p
                 p.get_all_access_handle()
                 loadProcess()
-                player_name = ""
-                player = g_game.getPlayer()
+                player_name = "Ningún jugador!"
+                player = g_game.getPlayer(False)
                 if player:
                     player_name = player.getName()
                 pStr.append('%d) [Origin]: %s' % (index, player_name))
@@ -2253,7 +2258,6 @@ class Script:
                     task(g_game.getPlayer(), script.interval)
                 except BaseException:
                     print(traceback.print_exc())
-                    #print("<Script.update %s> Unexpected error:" % script.getName(), sys.exc_info()[0])
 
     @staticmethod
     def loadscripts():
@@ -2622,7 +2626,7 @@ class Game:
         self.name = ""
         self.key = ""
 
-    def getPlayer(self):
+    def getPlayer(self, update=True):
         player_id = Memory.getNumber(ADDRESS_PLAYERID)
         if player_id == Player.CachePlayerID:
             if Player.CachePlayer.getName() == Player.CachePlayerName:
@@ -2637,6 +2641,8 @@ class Game:
             for index in range(ADDRESS_BATTLELIST_MAXINDEX):
                 player = Player(index)
                 if player.getId() == player_id:
+                    if not update:
+                        return player
                     player_name = player.getName()
                     Menus.Main.SetTitle(u"%s BOT - %s" % (GAME_TITLE, player_name))
                     Menus.Main.UpdatePlayerName(player)
@@ -4205,4 +4211,3 @@ g_k6.start()
 g_sett = CreateThread()
 g_sett.running = True
 g_sett.start()
-print("[Threads]: se han creado 6 hilos para el manejo de los scripts.")

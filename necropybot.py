@@ -18,17 +18,18 @@ def get_ping():
         ping_response = subprocess.Popen("ping -w 500 -n 1 www.necroxia.com", stdout=subprocess.PIPE).stdout.read()
         return int(lstring.match(ping_response, "Media = (%d+)ms"))
     except:
-        return 0
+        return 9999
 
 Signal.startHandler()
 Keyboard.thread.start()
 
 if OS_WINDOWS:
     if not SetConsoleCtrlHandler(ctrl_handler, 1):
+        Client.speak("Existe un problema con el controlador.")
         print("Unable to add SetConsoleCtrlHandler")
         exit()
 else:
-    Client.speak("Lo siento mucho, este bot solo esta disponible para windows.")
+    Client.speak("Solo funciono en Windows.")
     print("Only work on Windows!")
     exit()
 
@@ -36,9 +37,9 @@ BOT_PID = os.getpid()
 
 try:
     with open('key.pem', 'r') as pem:
-        print("Account found and registered!")
+        print("key.pem found!")
 except OSError:
-    Client.speak("Atencion: no se pudo abrir el archivo de licencia.")
+    Window_Speak.speak("No se pudo abrir el archivo key pem!")
     print("key.pem not found!")
     g_game.shutdown()
 
